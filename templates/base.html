@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}DBT 技能教学平台{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/django_htmx/htmx.min.js"></script>
+    <script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <nav class="bg-white shadow-sm border-b">
+        <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+            <a href="/" class="text-lg font-semibold text-blue-700">DBT 技能教学平台</a>
+            <div class="flex items-center gap-4">
+                {% if user.is_authenticated %}
+                    <span class="text-sm text-gray-600">{{ user.username }}</span>
+                    <a href="/accounts/logout/" class="text-sm text-gray-500 hover:text-gray-700">退出</a>
+                {% else %}
+                    <a href="/accounts/login/" class="text-sm text-blue-600 hover:text-blue-800">登录</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+    <main class="max-w-5xl xl:max-w-6xl mx-auto px-4 py-6">
+        {% block content %}{% endblock %}
+    </main>
+    <script src="/static/js/media.js?v=20260510"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

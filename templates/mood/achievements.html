@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}成就 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto mt-6">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <a href="{% url 'mood:home' %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回心情记录</a>
+            <h1 class="text-xl font-bold text-gray-800 mt-1">我的成就</h1>
+        </div>
+        <a href="{% url 'mood:record' %}" class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">记录心情</a>
+    </div>
+
+    {% if messages %}
+    <div class="mb-4">
+        {% for msg in messages %}
+        <div class="p-3 rounded text-sm {% if msg.tags == 'error' %}bg-red-50 text-red-700{% elif msg.tags == 'warning' %}bg-yellow-50 text-yellow-700{% else %}bg-blue-50 text-blue-700{% endif %} mb-2">{{ msg }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {# ── Stats summary ── #}
+    <div class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-blue-600">{{ total_trainings }}</p>
+            <p class="text-xs text-gray-500">总训练次数</p>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-green-600">{{ successful_trainings }}</p>
+            <p class="text-xs text-gray-500">成功训练</p>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-orange-600">{{ consecutive_learning_days }}</p>
+            <p class="text-xs text-gray-500">连续学习天数</p>
+        </div>
+        <div class="bg-white border rounded-lg p-4 text-center">
+            <p class="text-2xl font-bold text-purple-600">{{ unlocked_count }}/{{ total_count }}</p>
+            <p class="text-xs text-gray-500">成就解锁</p>
+        </div>
+    </div>
+
+    {# ── Achievement grid ── #}
+    <div class="grid grid-cols-2 gap-4">
+        {% for ach in achievements %}
+        <div class="bg-white border rounded-lg p-4 flex items-start gap-3 {% if not ach.unlocked %}opacity-50{% endif %}">
+            <div class="text-3xl flex-shrink-0">{{ ach.icon }}</div>
+            <div>
+                <div class="flex items-center gap-2 mb-1">
+                    <h3 class="font-semibold text-gray-800">{{ ach.name_cn }}</h3>
+                    {% if ach.unlocked %}
+                    <span class="text-green-500 text-xs">✓</span>
+                    {% else %}
+                    <span class="text-gray-300 text-xs">🔒</span>
+                    {% endif %}
+                </div>
+                <p class="text-xs text-gray-500 mb-1">{{ ach.description_cn }}</p>
+                {% if ach.unlocked and ach.unlocked_at %}
+                <p class="text-xs text-gray-400">解锁于 {{ ach.unlocked_at }}</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

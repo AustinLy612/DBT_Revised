@@ -1,0 +1,23 @@
+{% for m in conversation %}
+<div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}"
+     data-role="{{ m.role }}">
+    <div class="max-w-[85%] rounded-lg px-4 py-2 text-sm {% if m.role == 'user' %}bg-blue-500 text-white{% elif m.role == 'assistant' %}bg-gray-100 text-gray-800{% else %}bg-yellow-50 text-yellow-700 border border-yellow-200{% endif %}">
+        {{ m.content|linebreaksbr }}
+        {% if m.role == 'assistant' %}
+        <button onclick="DBT_TTS.play('{{ m.content|escapejs }}', '{{ m.message_id }}')"
+                id="tts-btn-{{ m.message_id }}"
+                class="ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom"
+                title="语音播报">🔊</button>
+        {% endif %}
+        {% if m.image_url %}
+        <div class="mt-2 flex justify-center">
+            <img src="{{ m.image_url }}" alt="教学配图" loading="lazy"
+                 class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% if is_terminal %}
+<div class="text-center p-3 text-sm text-red-500 font-medium">会话已中止</div>
+{% endif %}

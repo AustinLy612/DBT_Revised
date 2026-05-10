@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}教学 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto mt-10">
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">DBT 技能教学</h1>
+
+    <div class="bg-white border rounded-lg p-6 mb-6">
+        <h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">当前使用问卷信息</h2>
+        <dl class="grid grid-cols-2 gap-4 text-sm">
+            <div>
+                <dt class="text-gray-500">性别</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.get_gender_display }}</dd>
+            </div>
+            <div>
+                <dt class="text-gray-500">年龄</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.age }} 岁</dd>
+            </div>
+            <div>
+                <dt class="text-gray-500">年级</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.get_grade_display }}</dd>
+            </div>
+            <div>
+                <dt class="text-gray-500">问卷更新时间</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.updated_at|date:"Y-m-d H:i" }}</dd>
+            </div>
+            {% if profile.hobby_tags %}
+            <div>
+                <dt class="text-gray-500">爱好</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.hobby_tags|join:"、" }}</dd>
+            </div>
+            {% endif %}
+            {% if profile.concern_tags %}
+            <div>
+                <dt class="text-gray-500">关注</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.concern_tags|join:"、" }}</dd>
+            </div>
+            {% endif %}
+            {% if profile.other_hobby_text %}
+            <div>
+                <dt class="text-gray-500">其他爱好</dt>
+                <dd class="text-gray-800 font-medium">{{ profile.other_hobby_text }}</dd>
+            </div>
+            {% endif %}
+        </dl>
+    </div>
+
+    {% if messages %}
+    <div class="mb-4">
+        {% for message_ in messages %}
+        <div class="p-3 rounded text-sm {% if message_.tags == 'error' %}bg-red-50 text-red-700{% else %}bg-blue-50 text-blue-700{% endif %}">{{ message_ }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'teaching:start' %}">
+        {% csrf_token %}
+        <button type="submit" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-lg font-medium">
+            开始新教学
+        </button>
+    </form>
+
+    <div class="mt-4 flex gap-2">
+        <a href="{% url 'mood:record' %}" class="flex-1 text-center text-sm text-purple-600 hover:text-purple-800 px-4 py-2 border border-purple-200 rounded-lg">记录心情</a>
+        <a href="{% url 'mood:home' %}" class="flex-1 text-center text-sm text-purple-600 hover:text-purple-800 px-4 py-2 border border-purple-200 rounded-lg">心情历史</a>
+        <a href="{% url 'mood:achievements' %}" class="flex-1 text-center text-sm text-yellow-600 hover:text-yellow-800 px-4 py-2 border border-yellow-200 rounded-lg">成就</a>
+    </div>
+
+    {% if recent_sessions %}
+    <div class="mt-8">
+        <h2 class="text-lg font-semibold text-gray-700 mb-3">最近教学记录</h2>
+        <div class="space-y-2">
+            {% for s in recent_sessions %}
+            <a href="{% url 'teaching:session' s.session_id %}" class="block bg-white border rounded-lg p-4 hover:shadow transition">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <span class="font-medium text-gray-800">{{ s.selected_skill|default:"未选择技能" }}</span>
+                        {% if s.selected_module %}<span class="text-gray-500 text-sm ml-2">{{ s.selected_module }}</span>{% endif %}
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs px-2 py-1 rounded {% if s.status == 'completed' %}bg-green-100 text-green-700{% elif s.status == 'stopped_by_risk' %}bg-red-100 text-red-700{% elif s.status == 'user_terminated' %}bg-gray-100 text-gray-600{% else %}bg-blue-100 text-blue-700{% endif %}">{{ s.get_status_display }}</span>
+                        <span class="text-xs text-gray-400">{{ s.started_at|date:"m-d H:i" }}</span>
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

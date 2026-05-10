@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}记录心情 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto mt-8">
+    <a href="{% url 'mood:home' %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回心情记录</a>
+    <h1 class="text-xl font-bold text-gray-800 mt-2 mb-6">记录现在的心情</h1>
+
+    <form method="post" class="bg-white border rounded-lg p-6">
+        {% csrf_token %}
+        <div class="flex justify-center gap-4 mb-6">
+            {% for val in "12345"|make_list %}
+            <label class="cursor-pointer text-center">
+                <input type="radio" name="mood_value" value="{{ val }}" class="sr-only peer"
+                       {% if forloop.counter == 3 %}checked{% endif %}>
+                <div class="text-4xl peer-checked:scale-125 peer-checked:ring-2 peer-checked:ring-blue-300 rounded-full p-2 transition
+                            {% if forloop.counter == 1 %}hover:bg-red-50{% elif forloop.counter == 2 %}hover:bg-orange-50{% elif forloop.counter == 3 %}hover:bg-yellow-50{% elif forloop.counter == 4 %}hover:bg-green-50{% else %}hover:bg-blue-50{% endif %}">
+                    {% if forloop.counter == 1 %}😫
+                    {% elif forloop.counter == 2 %}😟
+                    {% elif forloop.counter == 3 %}😐
+                    {% elif forloop.counter == 4 %}🙂
+                    {% else %}😄
+                    {% endif %}
+                </div>
+                <span class="text-xs text-gray-500 mt-1 block">
+                    {% if forloop.counter == 1 %}很差
+                    {% elif forloop.counter == 2 %}不好
+                    {% elif forloop.counter == 3 %}一般
+                    {% elif forloop.counter == 4 %}不错
+                    {% else %}很好
+                    {% endif %}
+                </span>
+            </label>
+            {% endfor %}
+        </div>
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-600 mb-1">备注（可选）</label>
+            <input type="text" name="note" placeholder="什么让你有这个心情？"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
+        </div>
+        <button type="submit" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">
+            保存心情记录
+        </button>
+    </form>
+</div>
+{% endblock %}

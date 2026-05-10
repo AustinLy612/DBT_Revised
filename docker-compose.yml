@@ -1,0 +1,131 @@
+version: "3.9"
+
+services:
+  # ── Django web (Gunicorn) ──
+  web:
+    build: .
+    command: gunicorn dbt_platform.wsgi:application --bind 0.0.0.0:8000 --workers 3
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - hf_cache:/root/.cache/huggingface
+    environment:
+      - DJANGO_SETTINGS_MODULE=dbt_platform.settings
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+      - redis
+      - minio
+      - qdrant
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── Celery worker ──
+  worker:
+    build: .
+    command: celery -A dbt_platform worker --loglevel=info --concurrency=2
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - hf_cache:/root/.cache/huggingface
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+      - redis
+      - minio
+      - qdrant
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── Celery beat ──
+  beat:
+    build: .
+    command: celery -A dbt_platform beat --loglevel=info
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+      - redis
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── Redis ──
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── MongoDB ──
+  mongodb:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-rootpassword}
+      MONGO_INITDB_DATABASE: dbt_platform
+      MONGODB_PASSWORD: ${MONGODB_PASSWORD:-dbt_dev_password}
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── Qdrant ──
+  qdrant:
+    image: qdrant/qdrant:latest
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── MinIO ──
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  # ── Nginx (reverse proxy, :10443) ──
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "10443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./docker/certs:/etc/nginx/certs:ro
+      - ./staticfiles:/var/www/static:ro
+    depends_on:
+      - web
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+volumes:
+  mongodb_data:
+  redis_data:
+  qdrant_data:
+  minio_data:
+  hf_cache:
+
+networks:
+  dbt_net:
+    driver: bridge

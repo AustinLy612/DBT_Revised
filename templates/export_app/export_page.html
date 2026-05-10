@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}数据导出 - DBT 技能教学平台{% endblock %}
+{% block content %}
+
+<div class="max-w-4xl mx-auto mt-6">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <a href="{% url 'admin:index' %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回管理后台</a>
+            <h1 class="text-2xl font-bold text-gray-800 mt-1">数据导出</h1>
+        </div>
+        <div class="flex gap-2">
+            <a href="{% url 'export_app:export_users_json' %}"
+               class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+                导出全部 (JSON)
+            </a>
+            <a href="{% url 'export_app:export_users_csv' %}"
+               class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">
+                导出全部 (CSV)
+            </a>
+        </div>
+    </div>
+
+    {% if students %}
+    <div class="bg-white border rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b">
+                <tr>
+                    <th class="text-left px-4 py-3 font-medium text-gray-600">用户名</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-600">注册时间</th>
+                    <th class="text-right px-4 py-3 font-medium text-gray-600">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for student in students %}
+                <tr class="border-b last:border-0 hover:bg-gray-50">
+                    <td class="px-4 py-3">
+                        <span class="font-medium text-gray-800">{{ student.username }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-gray-500">
+                        {{ student.date_joined|date:"Y-m-d H:i" }}
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                        <a href="{% url 'export_app:export_user_json' student.id %}"
+                           class="text-xs text-blue-600 hover:text-blue-800 mr-3">JSON</a>
+                        <a href="{% url 'export_app:export_user_csv' student.id %}"
+                           class="text-xs text-green-600 hover:text-green-800">CSV</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded p-4 text-yellow-700 text-sm">
+        暂无学生用户。
+    </div>
+    {% endif %}
+
+    <p class="text-xs text-gray-400 mt-4">
+        所有导出操作均会记录到管理员操作日志中。
+    </p>
+</div>
+{% endblock %}

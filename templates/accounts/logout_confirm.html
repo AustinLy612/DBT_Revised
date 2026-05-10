@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}退出登录 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto mt-10 text-center">
+    <h1 class="text-xl font-bold text-gray-800 mb-4">确认退出登录</h1>
+    <p class="text-gray-600 mb-6">你确定要退出当前账号吗？</p>
+    <form method="post" class="inline">
+        {% csrf_token %}
+        <button type="submit" class="bg-red-500 text-white px-6 py-2 rounded-lg hover:bg-red-600 transition">退出</button>
+    </form>
+    <a href="/" class="inline-block ml-3 bg-gray-200 text-gray-700 px-6 py-2 rounded-lg hover:bg-gray-300 transition">取消</a>
+</div>
+{% endblock %}

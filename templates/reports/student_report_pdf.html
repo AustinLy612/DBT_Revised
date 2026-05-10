@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{{ student.username }} 的个人报告</title>
+<style>
+  @page { margin: 2cm; size: A4; }
+  body { font-family: "Noto Sans SC", "SimSun", sans-serif; font-size: 11pt; color: #333; line-height: 1.6; }
+  h1 { font-size: 18pt; border-bottom: 2px solid #2563eb; padding-bottom: 8px; margin-bottom: 12px; }
+  h2 { font-size: 13pt; color: #2563eb; margin-top: 22px; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+  h3 { font-size: 11pt; color: #374151; margin: 6px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px 0; font-size: 9pt; }
+  th { background: #f3f4f6; text-align: left; padding: 5px 7px; border: 1px solid #d1d5db; font-weight: 600; }
+  td { padding: 4px 7px; border: 1px solid #e5e7eb; }
+  .overview { display: flex; justify-content: space-between; margin-bottom: 18px; }
+  .overview-card { flex: 1; text-align: center; border: 1px solid #d1d5db; padding: 8px; margin: 0 4px; border-radius: 4px; }
+  .overview-card .value { font-size: 18pt; font-weight: bold; color: #2563eb; }
+  .overview-card .label { font-size: 8pt; color: #6b7280; }
+  .tag { padding: 2px 5px; border-radius: 3px; font-size: 8pt; }
+  .tag-pass { background: #d1fae5; color: #065f46; }
+  .tag-fail { background: #fef3c7; color: #92400e; }
+  .tag-terminated { background: #e5e7eb; color: #6b7280; }
+  .skill-bar { display: flex; align-items: center; margin: 4px 0; }
+  .skill-bar .bar { flex: 1; height: 10px; background: #e5e7eb; border-radius: 5px; margin: 0 8px; overflow: hidden; }
+  .skill-bar .fill { height: 100%; background: #2563eb; border-radius: 5px; }
+  .achievement-card { border: 1px solid #e5e7eb; padding: 6px 8px; margin: 4px 0; border-radius: 4px; page-break-inside: avoid; }
+  .info-grid { display: flex; flex-wrap: wrap; margin-bottom: 8px; }
+  .info-item { width: 45%; margin: 3px 0; font-size: 10pt; }
+  .info-label { color: #6b7280; }
+  .summary-box { background: #eff6ff; border: 1px solid #bfdbfe; padding: 10px 14px; margin: 12px 0 16px 0; border-radius: 4px; font-size: 10pt; }
+  .mood-chart { text-align: center; margin: 8px 0 4px 0; }
+  .tag-row { margin: 4px 0; }
+  .tag-item { display: inline-block; background: #f3f4f6; padding: 2px 6px; border-radius: 3px; margin: 1px 3px; font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<h1>{{ student.username }} 的个人报告</h1>
+
+{# ── Basic Info ── #}
+<h2>基础信息</h2>
+<div class="info-grid">
+  <div class="info-item"><span class="info-label">用户名：</span>{{ student.username }}</div>
+  <div class="info-item"><span class="info-label">注册时间：</span>{{ student.date_joined|date:"Y-m-d" }}</div>
+  <div class="info-item"><span class="info-label">性别：</span>{{ profile.gender|default:"未填写" }}</div>
+  <div class="info-item"><span class="info-label">年龄：</span>{% if profile.age %}{{ profile.age }} 岁{% else %}未填写{% endif %}</div>
+  <div class="info-item"><span class="info-label">年级：</span>{{ profile.grade|default:"未填写" }}</div>
+  <div class="info-item"><span class="info-label">报告生成时间：</span>{% now "Y-m-d H:i" %}</div>
+</div>
+{% if profile.hobbies or profile.concerns %}
+<div style="font-size: 10pt; margin-top: 4px;">
+  {% if profile.hobbies %}
+  <div style="margin-bottom: 2px;"><span class="info-label">兴趣爱好：</span>{{ profile.hobbies|join:"、" }}{% if profile.other_hobby %}；{{ profile.other_hobby }}{% endif %}</div>
+  {% endif %}
+  {% if profile.concerns %}
+  <div><span class="info-label">困扰/担忧：</span>{{ profile.concerns|join:"、" }}{% if profile.other_concern %}；{{ profile.other_concern }}{% endif %}</div>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ── Summary ── #}
+<h2>报告摘要</h2>
+<div class="summary-box">{{ summary }}</div>
+
+{# ── Overview Cards ── #}
+<div class="overview">
+  <div class="overview-card">
+    <div class="value">{{ completed_session_count }}</div>
+    <div class="label">完成教学次数</div>
+  </div>
+  <div class="overview-card">
+    <div class="value">{{ total_test_count }}</div>
+    <div class="label">测试次数</div>
+  </div>
+  <div class="overview-card">
+    <div class="value">{{ achievements|length }}</div>
+    <div class="label">成就解锁</div>
+  </div>
+  <div class="overview-card">
+    <div class="value">{% if overall_pass_rate is not None %}{{ overall_pass_rate }}%{% else %}-{% endif %}</div>
+    <div class="label">总正确率</div>
+  </div>
+</div>
+
+{# ── Mood Chart ── #}
+<h2>情绪变化</h2>
+{% if mood_svg_chart %}
+<div class="mood-chart">{{ mood_svg_chart|safe }}</div>
+{% endif %}
+{% if mood_history %}
+<table>
+  <tr><th>时间</th><th>情绪</th><th>场景</th><th>备注</th></tr>
+  {% for m in mood_history %}
+  <tr>
+    <td>{{ m.created_at|date:"Y-m-d H:i" }}</td>
+    <td>{{ m.emoji }} ({{ m.mood_value }}/5)</td>
+    <td>
+      {% if m.context == 'before_teaching' %}教学前
+      {% elif m.context == 'after_teaching' %}教学后
+      {% elif m.context == 'after_testing' %}测试后
+      {% else %}手动记录{% endif %}
+    </td>
+    <td>{{ m.note|default:"-" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p style="color: #9ca3af;">暂无情绪记录</p>
+{% endif %}
+
+{# ── Skill Learning ── #}
+<h2>技能学习次数</h2>
+{% if skill_counts %}
+{% for item in skill_counts %}
+<div class="skill-bar">
+  <span style="width: 110px; font-size: 9pt;">{{ item.skill }}</span>
+  <div class="bar"><div class="fill" style="width: {% widthratio item.count skill_counts.0.count 100 %}%"></div></div>
+  <span style="width: 18px; text-align: right; font-size: 9pt;">{{ item.count }}</span>
+</div>
+{% endfor %}
+{% else %}
+<p style="color: #9ca3af;">暂无技能学习记录</p>
+{% endif %}
+
+{# ── Test History ── #}
+<h2>测试记录</h2>
+{% if test_summary %}
+<table>
+  <tr><th>时间</th><th>技能</th><th>成绩</th><th>结果</th><th>重测</th></tr>
+  {% for t in test_summary %}
+  <tr>
+    <td>{{ t.created_at|date:"Y-m-d H:i" }}</td>
+    <td>{{ t.session_skill|default:"-" }}</td>
+    <td>{{ t.correct_count }}/{{ t.total_questions }}</td>
+    <td>
+      {% if t.status == 'completed' %}
+        {% if t.passed %}<span class="tag tag-pass">通过</span>
+        {% else %}<span class="tag tag-fail">未通过</span>{% endif %}
+      {% else %}<span class="tag tag-terminated">已终止</span>{% endif %}
+    </td>
+    <td>{% if t.attempt_no > 1 %}第{{ t.attempt_no }}次{% else %}首次{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% if retest_count > 0 %}
+<p style="font-size: 9pt; color: #6b7280;">重测次数：{{ retest_count }} 次</p>
+{% endif %}
+{% else %}
+<p style="color: #9ca3af;">暂无测试记录</p>
+{% endif %}
+
+{# ── Achievements ── #}
+<h2>成就解锁</h2>
+{% if achievements %}
+{% for ua in achievements %}
+<div class="achievement-card">
+  <strong>{{ ua.achievement.icon|default:"🏆" }} {{ ua.achievement.name_cn }}</strong>
+  <span style="color: #6b7280; font-size: 9pt;"> — {{ ua.achievement.description_cn }}</span>
+  <span style="color: #9ca3af; font-size: 8pt;">（解锁于 {{ ua.unlocked_at|date:"Y-m-d" }}）</span>
+</div>
+{% endfor %}
+{% else %}
+<p style="color: #9ca3af;">暂未解锁成就</p>
+{% endif %}
+
+</body>
+</html>

@@ -1,0 +1,47 @@
+{% load test_filters %}
+{# HTMX partial: question result after answering — shows correct/wrong + explanation + next button #}
+<div class="bg-white border rounded-lg p-5 mb-4" id="question-area">
+    {% if result.is_correct %}
+    <div class="flex items-center gap-2 mb-3">
+        <span class="text-green-600 text-lg">✓</span>
+        <span class="text-green-700 font-medium">回答正确！</span>
+    </div>
+    {% else %}
+    <div class="flex items-center gap-2 mb-3">
+        <span class="text-red-600 text-lg">✗</span>
+        <span class="text-red-700 font-medium">回答错误</span>
+    </div>
+    {% endif %}
+
+    <p class="text-base text-gray-800 font-medium mb-3">{{ result.question_text }}</p>
+
+    {% if result.temporary_image_url %}
+    <div class="mb-4">
+        <img src="{{ result.temporary_image_url }}" alt="题目配图" class="w-full max-w-md rounded-lg shadow" loading="lazy">
+    </div>
+    {% endif %}
+
+    <div class="grid grid-cols-1 gap-1 mb-4">
+        {% for opt in result.options %}
+        <div class="text-sm px-3 py-2 rounded
+            {% if forloop.counter0|slugify == result.correct_option %}bg-green-100 text-green-800 font-medium border border-green-300
+            {% elif option_letters|index:forloop.counter0 == result.user_answer and not result.is_correct %}bg-red-100 text-red-800 border border-red-300
+            {% else %}bg-gray-50 text-gray-600{% endif %}">
+            {{ option_letters|index:forloop.counter0 }}. {{ opt }}
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if result.explanation %}
+    <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+        <p class="text-xs font-medium text-blue-700 mb-1">解析</p>
+        <p class="text-sm text-blue-800">{{ result.explanation }}</p>
+    </div>
+    {% endif %}
+
+    <button type="button"
+            class="w-full mt-2 bg-blue-600 text-white px-4 py-2.5 rounded-lg hover:bg-blue-700 transition text-sm"
+            onclick="location.reload()">
+        下一题
+    </button>
+</div>

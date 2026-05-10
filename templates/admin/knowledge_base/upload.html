@@ -1,0 +1,103 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+  <h1>{{ title }}</h1>
+
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+    <div class="errornote">{{ form.non_field_errors }}</div>
+    {% endif %}
+
+    <fieldset class="module aligned">
+      <div class="form-row">
+        <div>
+          {{ form.file.errors }}
+          <label for="{{ form.file.id_for_label }}">{{ form.file.label }}:</label>
+          {{ form.file }}
+          {% if form.file.help_text %}
+            <div class="help">{{ form.file.help_text }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="module aligned">
+      <h2>{% trans "基本信息" %}</h2>
+      <div class="form-row">
+        <div>
+          {{ form.title.errors }}
+          <label for="{{ form.title.id_for_label }}">{{ form.title.label }}:</label>
+          {{ form.title }}
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          {{ form.module.errors }}
+          <label for="{{ form.module.id_for_label }}">{{ form.module.label }}:</label>
+          {{ form.module }}
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          {{ form.skill.errors }}
+          <label for="{{ form.skill.id_for_label }}">{{ form.skill.label }}:</label>
+          {{ form.skill }}
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          {{ form.version.errors }}
+          <label for="{{ form.version.id_for_label }}">{{ form.version.label }}:</label>
+          {{ form.version }}
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset class="module aligned">
+      <h2>{% trans "元数据" %}</h2>
+      <div class="form-row">
+        <div>
+          {{ form.difficulty.errors }}
+          <label for="{{ form.difficulty.id_for_label }}">{{ form.difficulty.label }}:</label>
+          {{ form.difficulty }}
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          {{ form.is_beginner_friendly.errors }}
+          <label for="{{ form.is_beginner_friendly.id_for_label }}">{{ form.is_beginner_friendly.label }}:</label>
+          {{ form.is_beginner_friendly }}
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          {{ form.scenario_tags.errors }}
+          <label for="{{ form.scenario_tags.id_for_label }}">{{ form.scenario_tags.label }}:</label>
+          {{ form.scenario_tags }}
+          {% if form.scenario_tags.help_text %}
+            <div class="help">{{ form.scenario_tags.help_text }}</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          {{ form.risk_flags.errors }}
+          <label for="{{ form.risk_flags.id_for_label }}">{{ form.risk_flags.label }}:</label>
+          {{ form.risk_flags }}
+          {% if form.risk_flags.help_text %}
+            <div class="help">{{ form.risk_flags.help_text }}</div>
+          {% endif %}
+        </div>
+      </div>
+    </fieldset>
+
+    <div class="submit-row">
+      <input type="submit" value="{% trans '上传并处理' %}" class="default">
+    </div>
+  </form>
+</div>
+{% endblock %}

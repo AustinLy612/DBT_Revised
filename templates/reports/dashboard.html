@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}报告面板 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-800 mb-6">学生报告面板</h1>
+{% if authorized_students %}
+    <div class="grid gap-3">
+    {% for student in authorized_students %}
+        <a href="{% url 'reports:student_report' student.id %}"
+           class="block bg-white border rounded-lg p-4 hover:shadow transition">
+            <span class="font-medium text-blue-700">{{ student.username }}</span>
+            <span class="text-sm text-gray-500 ml-3">
+                注册时间: {{ student.date_joined|date:"Y-m-d" }}
+            </span>
+        </a>
+    {% endfor %}
+    </div>
+{% else %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded p-4 text-yellow-700">
+        暂无授权查看的学生。
+    </div>
+{% endif %}
+{% endblock %}

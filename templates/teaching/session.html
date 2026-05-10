@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+{% block title %}教学会话 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<div class="max-w-5xl xl:max-w-6xl mx-auto mt-6">
+    <div class="flex items-center justify-between mb-4">
+        <div>
+            <a href="{% url 'teaching:home' %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回教学首页</a>
+            <h1 class="text-xl font-bold text-gray-800 mt-1">
+                {% if session.selected_skill %}{{ session.selected_skill }}{% else %}教学会话{% endif %}
+            </h1>
+        </div>
+        <span class="text-xs px-2 py-1 rounded">
+            {% if is_terminal %}
+                <span class="px-2 py-1 rounded text-xs
+                    {% if session.status == 'completed' %}bg-green-100 text-green-700
+                    {% elif session.status == 'stopped_by_risk' %}bg-red-100 text-red-700
+                    {% else %}bg-gray-100 text-gray-600{% endif %}">
+                    {{ session.get_status_display }}
+                </span>
+            {% else %}
+                <span class="px-2 py-1 rounded text-xs bg-blue-100 text-blue-700">{{ session.get_phase_display }}</span>
+            {% endif %}
+        </span>
+    </div>
+
+    {% if messages %}
+    <div class="mb-4">
+        {% for msg in messages %}
+        <div class="p-3 rounded text-sm {% if msg.tags == 'error' %}bg-red-50 text-red-700{% elif msg.tags == 'warning' %}bg-yellow-50 text-yellow-700{% else %}bg-blue-50 text-blue-700{% endif %} mb-2">{{ msg }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if is_terminal %}
+        {# ── Terminal state ── #}
+        <div class="bg-white border rounded-lg p-6 mb-4">
+            {% if session.status == 'completed' %}
+                <h2 class="text-lg font-semibold text-green-700 mb-3">教学已完成</h2>
+                {% if session.teaching_summary %}
+                <div class="bg-green-50 rounded p-4 text-sm text-gray-700">
+                    <p class="font-medium text-green-800 mb-1">教学摘要</p>
+                    <p>{{ session.teaching_summary }}</p>
+                </div>
+                {% endif %}
+                <div class="mt-3 text-sm text-gray-500">
+                    完成时间：{{ session.completed_at|date:"Y-m-d H:i" }} | 技能：{{ session.selected_skill }}
+                </div>
+
+                {% if not session.post_mood_id %}
+                <div class="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
+                    <p class="text-sm text-purple-700 mb-2">教学结束了，记录一下你现在的心情吧。</p>
+                    <a href="{% url 'mood:post_teaching' session.session_id %}?next={% url 'teaching:session' session.session_id %}"
+                       class="inline-block text-sm bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition">记录教学后心情</a>
+                </div>
+                {% else %}
+                <div class="mt-3 text-sm text-gray-400">✓ 已记录教学后心情</div>
+                {% endif %}
+            {% elif session.status == 'stopped_by_risk' %}
+                <h2 class="text-lg font-semibold text-red-700 mb-3">⚠ 会话已中止</h2>
+                <p class="text-sm text-gray-700 mb-2">你刚才表达的内容可能表示你正在经历比较危险或难以独自承受的状态。当前教学已暂停。</p>
+                <p class="text-sm text-gray-700 mb-3">请尽快联系身边可信任的成年人，例如学校老师、班主任、学校心理老师、家长或监护人。</p>
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 text-sm">
+                    <p class="font-medium text-gray-800 mb-1">你也可以拨打以下心理援助热线寻求帮助：</p>
+                    <p class="text-gray-700">全国统一心理援助热线：<span class="font-mono font-bold text-red-700">12356</span></p>
+                    <p class="text-gray-700">北京市心理援助热线：<span class="font-mono font-bold text-red-700">010-82951332</span></p>
+                    <p class="text-xs text-gray-500">座机用户可拨打 <span class="font-mono font-bold">800-810-1117</span></p>
+                </div>
+                <p class="text-sm text-red-700 font-medium">如果你正处于立即危险中，请立刻联系身边成年人并寻求当地紧急帮助。</p>
+            {% else %}
+                <h2 class="text-lg font-semibold text-gray-600 mb-3">会话已终止</h2>
+                <p class="text-sm text-gray-500">此会话已被手动终止。</p>
+            {% endif %}
+            <div class="mt-4 flex gap-2">
+                <a href="{% url 'teaching:home' %}" class="text-sm text-blue-600 hover:text-blue-800 px-4 py-2 border border-blue-200 rounded-lg">返回教学首页</a>
+                {% if session.status == 'completed' %}
+                <form method="post" action="{% url 'testing:start' session.session_id %}">
+                    {% csrf_token %}
+                    <button type="submit" class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">开始测试</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if conversation %}
+        <div class="bg-white border rounded-lg p-4">
+            <h3 class="text-sm font-semibold text-gray-500 mb-3">对话记录</h3>
+            <div class="h-[450px] overflow-y-auto space-y-3" id="chat-messages">
+                {% for m in conversation %}
+                <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}"
+                     data-role="{{ m.role }}">
+                    <div class="max-w-[80%] rounded-lg px-4 py-2 text-sm {% if m.role == 'user' %}bg-blue-500 text-white{% elif m.role == 'assistant' %}bg-gray-100 text-gray-800{% else %}bg-yellow-50 text-yellow-700 border border-yellow-200{% endif %}">
+                        {{ m.content|linebreaksbr }}
+                        {% if m.role == 'assistant' %}
+                        <button onclick="DBT_TTS.play('{{ m.content|escapejs }}', '{{ m.message_id }}')"
+                                id="tts-btn-{{ m.message_id }}"
+                                class="ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom"
+                                title="语音播报">🔊</button>
+                        {% endif %}
+                        {% if m.image_url %}
+                        <div class="mt-2 flex justify-center">
+                            <img src="{{ m.image_url }}" alt="教学配图" loading="lazy"
+                                 class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+    {% elif session.phase == 'pre_mood_recording' %}
+        {# ── Pre-Mood Recording Phase ── #}
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">教学前心情记录</h2>
+            <p class="text-sm text-gray-500 mb-6">在开始教学前，先记录一下你现在的心情吧。</p>
+
+            <form method="post" action="{% url 'teaching:record_pre_mood' session.session_id %}">
+                {% csrf_token %}
+                <div class="flex justify-center gap-4 mb-6">
+                    {% for val in "12345"|make_list %}
+                    <label class="cursor-pointer text-center">
+                        <input type="radio" name="mood_value" value="{{ val }}" class="sr-only peer"
+                               {% if forloop.counter == 3 %}checked{% endif %}>
+                        <div class="text-4xl peer-checked:scale-125 peer-checked:ring-2 peer-checked:ring-blue-300 rounded-full p-2 transition
+                                    {% if forloop.counter == 1 %}hover:bg-red-50{% elif forloop.counter == 2 %}hover:bg-orange-50{% elif forloop.counter == 3 %}hover:bg-yellow-50{% elif forloop.counter == 4 %}hover:bg-green-50{% else %}hover:bg-blue-50{% endif %}">
+                            {% if forloop.counter == 1 %}😫
+                            {% elif forloop.counter == 2 %}😟
+                            {% elif forloop.counter == 3 %}😐
+                            {% elif forloop.counter == 4 %}🙂
+                            {% else %}😄
+                            {% endif %}
+                        </div>
+                        <span class="text-xs text-gray-500 mt-1 block">
+                            {% if forloop.counter == 1 %}很差
+                            {% elif forloop.counter == 2 %}不好
+                            {% elif forloop.counter == 3 %}一般
+                            {% elif forloop.counter == 4 %}不错
+                            {% else %}很好
+                            {% endif %}
+                        </span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-600 mb-1">备注（可选）</label>
+                    <input type="text" name="note" placeholder="有什么想记录的吗？"
+                           class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
+                </div>
+                <button type="submit" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">
+                    确认并开始
+                </button>
+            </form>
+        </div>
+
+    {% elif session.phase == 'info_collection' %}
+        {# ── Info Collection Phase (auto-transition, shown briefly) ── #}
+        <div class="bg-white border rounded-lg p-6 text-center">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">正在收集你的学习信息</h2>
+            <p class="text-sm text-gray-500 mb-4">正在读取你的问卷信息、学习历史和测试记录...</p>
+            <form method="post" action="{% url 'teaching:record_pre_mood' session.session_id %}">
+                {% csrf_token %}
+                <input type="hidden" name="mood_value" value="3">
+                <input type="hidden" name="auto_continue" value="1">
+                <button type="submit" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">
+                    继续
+                </button>
+            </form>
+        </div>
+
+    {% elif session.phase == 'skill_selection' %}
+        {# ── Skill Selection Phase ── #}
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">AI 技能推荐</h2>
+            <p class="text-sm text-gray-500 mb-4">基于你的问卷信息和学习历史，AI 推荐以下技能：</p>
+
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-5">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-lg font-bold text-blue-800">{{ session.selected_skill }}</span>
+                    {% if session.selected_module %}<span class="text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded">{{ session.selected_module }}</span>{% endif %}
+                </div>
+                {% if session.selection_reason %}
+                <p class="text-sm text-blue-700">{{ session.selection_reason }}</p>
+                {% endif %}
+            </div>
+
+            <form method="post" action="{% url 'teaching:confirm_skill' session.session_id %}">
+                {% csrf_token %}
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-600 mb-1">或者输入你想学习的技能：</label>
+                    <input type="text" name="custom_skill" placeholder="留空则使用 AI 推荐"
+                           class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
+                </div>
+                <button type="submit" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">
+                    确认并开始教学
+                </button>
+            </form>
+        </div>
+
+    {% elif session.phase == 'rag_retrieval_for_teaching' %}
+        {# ── RAG Retrieval Phase (auto-transition, shown briefly) ── #}
+        <div class="bg-white border rounded-lg p-6 text-center">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">正在准备教学资料</h2>
+            <p class="text-sm text-gray-500 mb-4">正在检索「{{ session.selected_skill }}」相关的知识内容...</p>
+            <div class="animate-pulse text-blue-500 text-sm">检索中...</div>
+            <form method="post" action="{% url 'teaching:confirm_skill' session.session_id %}">
+                {% csrf_token %}
+                <button type="submit" class="mt-4 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">
+                    继续
+                </button>
+            </form>
+        </div>
+
+    {% elif session.phase == 'teaching' %}
+        {# ── Teaching Phase ── #}
+        <div class="grid grid-cols-4 gap-4">
+            <div class="col-span-1">
+                <div class="bg-white border rounded-lg p-4 sticky top-4">
+                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">教学计划</h3>
+                    {% if plan_steps %}
+                    <ol class="space-y-2">
+                        {% for step in plan_steps %}
+                        <li class="text-xs text-gray-600">
+                            <span class="font-medium text-gray-800">{{ step.step_number }}.</span>
+                            {{ step.title }}
+                            {% if step.estimated_minutes %}<span class="text-gray-400 ml-1">({{ step.estimated_minutes }}min)</span>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ol>
+                    {% else %}
+                    <p class="text-xs text-gray-400">无教学计划</p>
+                    {% endif %}
+
+                    {# Image generation for teaching scene #}
+                    <div class="mt-4 pt-4 border-t">
+                        <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">情景配图</h3>
+                        <div id="teaching-image-area"></div>
+                        <button onclick="DBT_Image.generate('DBT技能教学情景图：{{ session.selected_skill|default:'正念练习'|escapejs }}', 'teaching-image-area', {source: 'teaching_scene', session_id: '{{ session.session_id }}'})"
+                                class="mt-2 w-full text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 transition">
+                            🎨 生成教学配图
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-span-3">
+                <div class="bg-white border rounded-lg">
+                    <div class="p-4 border-b bg-gray-50 flex items-center justify-between">
+                        <span class="text-sm font-medium text-gray-700">教学对话</span>
+                        <label class="flex items-center gap-1.5 cursor-pointer select-none" title="AI回复后自动语音播报">
+                            <span class="text-xs text-gray-400" id="tts-autoplay-label">自动播报</span>
+                            <input type="checkbox" id="tts-autoplay-toggle" checked
+                                   class="sr-only peer"
+                                   onchange="var on=DBT_TTS.toggleAutoPlay();document.getElementById('tts-autoplay-label').textContent=on?'自动播报':'已关闭'">
+                            <div class="w-8 h-4 bg-gray-300 rounded-full peer-checked:bg-blue-500 transition relative">
+                                <div class="w-3 h-3 bg-white rounded-full absolute top-0.5 left-0.5 transition peer-checked:translate-x-4"></div>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="p-4 h-[450px] overflow-y-auto space-y-3" id="chat-messages">
+                        {% for m in conversation %}
+                        <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}"
+                             data-role="{{ m.role }}">
+                            <div class="max-w-[85%] rounded-lg px-4 py-2 text-sm {% if m.role == 'user' %}bg-blue-500 text-white{% elif m.role == 'assistant' %}bg-gray-100 text-gray-800{% else %}bg-yellow-50 text-yellow-700 border border-yellow-200{% endif %}">
+                                {{ m.content|linebreaksbr }}
+                                {% if m.role == 'assistant' %}
+                                <button onclick="DBT_TTS.play('{{ m.content|escapejs }}', '{{ m.message_id }}')"
+                                        id="tts-btn-{{ m.message_id }}"
+                                        class="ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom"
+                                        title="语音播报">🔊</button>
+                                {% endif %}
+                                {% if m.image_url %}
+                                <div class="mt-2 flex justify-center">
+                                    <img src="{{ m.image_url }}" alt="教学配图" loading="lazy"
+                                         class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="border-t p-3">
+                        <form hx-post="{% url 'teaching:send_message' session.session_id %}"
+                              hx-target="#chat-messages"
+                              hx-swap="innerHTML"
+                              hx-indicator="#sending-indicator"
+                              class="flex gap-2">
+                            {% csrf_token %}
+                            <input type="text" name="message" autofocus autocomplete="off" id="chat-input"
+                                   placeholder="输入你的想法或问题..."
+                                   class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
+                            {# ASR microphone button #}
+                            <button type="button" id="mic-btn"
+                                    onclick="if(DBT_ASR.isRecording()){DBT_ASR.stop();this.textContent='🎤';this.classList.remove('bg-red-500');this.classList.add('bg-gray-100');document.getElementById('asr-status').textContent=''}else{DBT_ASR.start(function(){document.getElementById('mic-btn').textContent='⏹';document.getElementById('mic-btn').classList.add('bg-red-500');document.getElementById('mic-btn').classList.remove('bg-gray-100')},function(err){var s=document.getElementById('asr-status');if(s&&s.textContent.indexOf('✗')===-1)s.textContent='✗ 语音输入失败'})}"
+                                    class="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-200 transition text-sm flex-shrink-0"
+                                    title="语音输入">🎤</button>
+                            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
+                                发送
+                            </button>
+                        </form>
+                        <div id="sending-indicator" class="htmx-indicator text-xs text-gray-400 mt-1">
+                            正在思考...
+                        </div>
+                        <div id="asr-status" class="text-xs text-gray-400 mt-1"></div>
+                        <div class="flex justify-end mt-2 gap-2">
+                            <form method="post" action="{% url 'teaching:end_session' session.session_id %}"
+                                  onsubmit="return confirm('确定要结束本次教学吗？')">
+                                {% csrf_token %}
+                                <button type="submit" class="text-xs text-green-600 hover:text-green-800 px-2 py-1">结束教学</button>
+                            </form>
+                            <form method="post" action="{% url 'teaching:terminate' session.session_id %}"
+                                  onsubmit="return confirm('确定要终止本次教学吗？')">
+                                {% csrf_token %}
+                                <button type="submit" class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">终止会话</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
