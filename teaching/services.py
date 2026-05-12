@@ -1,7 +1,7 @@
 """Teaching session orchestration services.
 
 Implements the full teaching state machine:
-  pre_mood_recording → info_collection → skill_selection →
+  pre_mood_recording → personal_inquiry → info_collection → skill_selection →
   rag_retrieval_for_teaching → teaching → completed/stopped_by_risk/user_terminated
 """
 
@@ -51,7 +51,7 @@ def run_pre_mood(
     emoji: str = "",
     note: str = "",
 ) -> str:
-    """Record the pre-teaching mood and advance to info_collection phase.
+    """Record the pre-teaching mood and advance to personal_inquiry phase.
 
     Returns the mood_id.
     """
@@ -67,10 +67,10 @@ def run_pre_mood(
     )
 
     session.pre_mood_id = mood.mood_id
-    session.phase = session.Phase.INFO_COLLECTION
+    session.phase = session.Phase.PERSONAL_INQUIRY
     session.save(update_fields=["pre_mood_id", "phase"])
 
-    logger.info("Pre-mood %s recorded for session %s, value=%d",
+    logger.info("Pre-mood %s recorded for session %s, value=%d, advancing to personal_inquiry",
                 mood.mood_id, session.session_id, mood_value)
     return mood.mood_id
 
@@ -81,13 +81,75 @@ def _emoji_for_value(value: int) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 2: Info collection — read questionnaire + history + tests
+# Phase 2: Personal inquiry — ask about recent experiences
+# ═══════════════════════════════════════════════════════════════
+
+def generate_inquiry_question(
+    session: models.Model,
+    user: models.Model,
+) -> dict[str, Any]:
+    """Generate a warm, personalized question asking about the student's recent situation.
+
+    Uses the student's profile and pre-mood to craft an empathetic inquiry.
+    Returns a dict with greeting, question, and inquiry_focus.
+    """
+    from knowledge_base.rag.chains import generate_personal_inquiry
+
+    profile = getattr(user, "profile", None)
+
+    # Read mood value from the session's pre-mood record
+    mood_value = 3
+    mood_note = ""
+    if session.pre_mood_id:
+        from mood.models import MoodRecord
+        try:
+            mood = MoodRecord.objects.get(mood_id=session.pre_mood_id)
+            mood_value = mood.mood_value
+            mood_note = mood.note or ""
+        except MoodRecord.DoesNotExist:
+            pass
+
+    result = generate_personal_inquiry(
+        profile=profile,
+        mood_value=mood_value,
+        mood_note=mood_note,
+    )
+
+    logger.info("Personal inquiry generated for session %s: focus=%s",
+                session.session_id, result.inquiry_focus)
+    return result.model_dump()
+
+
+def run_personal_inquiry(
+    session: models.Model,
+    user: models.Model,
+    personal_context: str,
+) -> dict[str, Any]:
+    """Store the student's personal context and run info collection + skill selection.
+
+    The personal context becomes the most important input for skill recommendation.
+
+    Returns a dict with the skill selection result.
+    """
+    session.personal_context = personal_context
+    session.save(update_fields=["personal_context"])
+
+    logger.info("Personal context recorded for session %s (%d chars)",
+                session.session_id, len(personal_context))
+
+    # Now gather all data and run skill selection
+    return run_info_collection(session, user)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3: Info collection — read questionnaire + history + tests
 # ═══════════════════════════════════════════════════════════════
 
 def run_info_collection(session: models.Model, user: models.Model) -> dict[str, Any]:
     """Gather all user context: questionnaire, teaching history, test records.
 
-    After collection, automatically runs skill selection and advances
+    After collection, automatically runs skill selection (now informed by
+    personal_context from the personal_inquiry phase) and advances
     the session to the skill_selection phase.
 
     Returns a dict with collected context including test performance data.
@@ -169,7 +231,7 @@ def run_info_collection(session: models.Model, user: models.Model) -> dict[str, 
     _run_skill_selection_inner(session, user, profile, teaching_history, test_stats)
 
     session.phase = session.Phase.SKILL_SELECTION
-    session.save(update_fields=["phase", "selected_skill", "selection_reason", "rag_context_ids"])
+    session.save(update_fields=["phase", "selected_module", "selected_skill", "selection_reason", "rag_context_ids"])
 
     return collected_context
 
@@ -185,14 +247,18 @@ def _run_skill_selection_inner(
     teaching_history: list[dict[str, Any]],
     test_stats: dict[str, Any],
 ) -> dict[str, Any]:
-    """Core skill selection logic — shared by info_collection and manual calls."""
+    """Core skill selection logic — shared by info_collection and manual calls.
+
+    Uses personal_context (from the personal_inquiry phase) and pre-mood
+    as the most important inputs for skill recommendation.
+    """
     from knowledge_base.rag.chains import generate_skill_selection
     from knowledge_base.rag.retriever import get_retriever
 
     history_skills = [h["skill"] for h in teaching_history if h["skill"]]
 
     # Build an enriched retrieval query using test performance data
-    retrieval_query = "DBT技能概述 青少年"
+    retrieval_query = "DBT具体技能 青少年 正念 情绪调节 痛苦耐受 人际效能"
     failed_skills = [
         t["session_skill"] for t in test_stats["recent_tests"]
         if not t["passed"] and t["session_skill"]
@@ -201,20 +267,34 @@ def _run_skill_selection_inner(
         unique_failed = list(dict.fromkeys(failed_skills))[:3]
         retrieval_query += " 薄弱技能:" + ",".join(unique_failed)
 
+    # Read mood value for skill selection context
+    mood_value = None
+    if session.pre_mood_id:
+        from mood.models import MoodRecord
+        try:
+            mood = MoodRecord.objects.get(mood_id=session.pre_mood_id)
+            mood_value = mood.mood_value
+        except MoodRecord.DoesNotExist:
+            pass
+
     retriever = get_retriever(k=5, user=user, session=session, use_case="teaching")
     result = generate_skill_selection(
         profile=profile,
         history_skills=history_skills,
         retriever=retriever,
         retrieval_query=retrieval_query,
+        personal_context=session.personal_context or "",
+        mood_value=mood_value,
     )
 
+    session.selected_module = result.selected_module
     session.selected_skill = result.selected_skill
     session.selection_reason = result.reason
     session.rag_context_ids = result.source_chunk_ids
-    session.save(update_fields=["selected_skill", "selection_reason", "rag_context_ids"])
+    session.save(update_fields=["selected_module", "selected_skill", "selection_reason", "rag_context_ids"])
 
-    logger.info("Skill selected for session %s: %s", session.session_id, session.selected_skill)
+    logger.info("Skill selected for session %s: %s (personal_context_len=%d)",
+                session.session_id, session.selected_skill, len(session.personal_context or ""))
     return result.model_dump()
 
 
@@ -296,6 +376,8 @@ def run_teaching_plan(session: models.Model, user: models.Model) -> dict[str, An
     """Generate a teaching plan and advance to the teaching phase.
 
     Includes the rag_retrieval_for_teaching step as a sub-step.
+    After plan generation, pre-fetches RAG context for each plan step
+    so per-message retrievals during teaching can use cached context.
     """
     profile = getattr(user, "profile", None)
 
@@ -314,6 +396,24 @@ def run_teaching_plan(session: models.Model, user: models.Model) -> dict[str, An
     )
 
     plan_dict = result.model_dump()
+
+    # Pre-fetch RAG context for each plan step
+    plan_steps = plan_dict.get("plan_steps", [])
+    step_contexts: list[list[dict[str, Any]]] = []
+    if plan_steps:
+        step_retriever = get_retriever(k=3, user=user, session=session, use_case="teaching")
+        skill = session.selected_skill or ""
+        for step in plan_steps:
+            step_text = step if isinstance(step, str) else str(step)
+            query = f"{skill} {step_text}"
+            try:
+                chunks = step_retriever.search_with_context(query)
+                step_contexts.append(chunks)
+            except Exception:
+                logger.exception("Pre-fetch failed for step: %s", step_text[:60])
+                step_contexts.append([])
+        plan_dict["step_contexts"] = step_contexts
+
     session.teaching_plan = plan_dict
     session.phase = session.Phase.TEACHING
     if result.source_chunk_ids:
@@ -336,8 +436,15 @@ def generate_teaching_response(
     user: models.Model,
     student_message: str,
     conversation_history: list[dict[str, str]],
+    *,
+    include_risk_assessment: bool = False,
 ) -> dict[str, Any]:
-    """Generate an AI teaching response to the student's message."""
+    """Generate an AI teaching response to the student's message.
+
+    When include_risk_assessment=True, risk fields (risk_level,
+    should_stop_session, risk_reasoning) are populated from the same
+    LLM call — no separate risk API round-trip is needed.
+    """
     from .models import ChatMessage
 
     ChatMessage.objects.create(
@@ -353,6 +460,12 @@ def generate_teaching_response(
         total_msgs = len(conversation_history)
         current_step = min(total_msgs // 2 + 1, len(plan_steps))
 
+    # Use pre-fetched step context when available
+    step_contexts = session.teaching_plan.get("step_contexts", []) if session.teaching_plan else []
+    prefetched_chunks: list[dict[str, Any]] | None = None
+    if step_contexts and 1 <= current_step <= len(step_contexts):
+        prefetched_chunks = step_contexts[current_step - 1] or None
+
     profile = getattr(user, "profile", None)
 
     from knowledge_base.rag.chains import generate_teaching_content
@@ -367,6 +480,8 @@ def generate_teaching_response(
         conversation_history=conversation_history,
         student_message=student_message,
         retriever=retriever,
+        include_risk_assessment=include_risk_assessment,
+        prefetched_chunks=prefetched_chunks,
     )
 
     content_dict = result.model_dump()

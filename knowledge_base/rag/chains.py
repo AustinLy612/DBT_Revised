@@ -29,6 +29,7 @@ from .llm_client import (
     minimax_chat_completion,
 )
 from .prompts import (
+    build_personal_inquiry_messages,
     build_risk_assessment_messages,
     build_skill_selection_messages,
     build_teaching_content_messages,
@@ -38,6 +39,7 @@ from .prompts import (
 )
 from .retriever import DBTRetriever, get_retriever
 from .schemas import (
+    PersonalInquiryResult,
     RiskAssessment,
     SkillSelectionResult,
     TeachingContent,
@@ -85,6 +87,32 @@ def _call_llm_or_mock(
     return OutputValidator.validate_and_repair(parsed, schema_model)
 
 
+# ── Personal Inquiry ──
+
+def generate_personal_inquiry(
+    *,
+    profile: Any = None,
+    mood_value: int = 3,
+    mood_note: str = "",
+    mock_llm_response: dict[str, Any] | None = None,
+) -> PersonalInquiryResult:
+    """Generate a warm, empathetic question to understand the student's recent situation.
+
+    Called after pre-mood recording and before skill selection so the student's
+    personal context can inform which skill is most appropriate.
+
+    Returns a validated PersonalInquiryResult with greeting, question, and focus.
+    """
+    messages = build_personal_inquiry_messages(
+        profile=profile,
+        mood_value=mood_value,
+        mood_note=mood_note,
+    )
+
+    result = _call_llm_or_mock(messages, PersonalInquiryResult, mock_llm_response)
+    return PersonalInquiryResult(**result)
+
+
 # ── Skill Selection ──
 
 def generate_skill_selection(
@@ -94,6 +122,8 @@ def generate_skill_selection(
     available_modules: list[str] | None = None,
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
+    personal_context: str = "",
+    mood_value: int | None = None,
     mock_llm_response: dict[str, Any] | None = None,
 ) -> SkillSelectionResult:
     """Generate a skill recommendation for a student.
@@ -114,6 +144,8 @@ def generate_skill_selection(
         history_skills=history_skills,
         available_modules=available_modules,
         retrieval_chunks=chunks,
+        personal_context=personal_context,
+        mood_value=mood_value,
     )
 
     result = _call_llm_or_mock(messages, SkillSelectionResult, mock_llm_response)
@@ -168,12 +200,19 @@ def generate_teaching_content(
     student_message: str = "",
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
+    include_risk_assessment: bool = False,
+    prefetched_chunks: list[dict[str, Any]] | None = None,
     mock_llm_response: dict[str, Any] | None = None,
 ) -> TeachingContent:
     """Generate a single teaching message during a session.
 
     Returns a validated TeachingContent with message type, content,
-    optional question, confidence, and source chunks.
+    optional question, confidence, source chunks, and (when
+    include_risk_assessment=True) risk assessment fields.
+
+    When prefetched_chunks is provided, they are merged into the
+    retrieval results, giving the LLM broader context without
+    requiring an additional search round-trip.
     """
 
     is_mock = mock_llm_response is not None
@@ -183,6 +222,13 @@ def generate_teaching_content(
         ret = retriever or get_retriever(k=3, use_case="teaching")
         query = retrieval_query or f"{selected_skill} {student_message}"
         chunks = ret.search_with_context(query)
+        # Merge pre-fetched chunks (deduplicated by chunk_id)
+        if prefetched_chunks:
+            seen_ids = {c.get("chunk_id") for c in chunks if c.get("chunk_id")}
+            for pc in prefetched_chunks:
+                if pc.get("chunk_id") not in seen_ids:
+                    seen_ids.add(pc.get("chunk_id"))
+                    chunks.append(pc)
 
     messages = build_teaching_content_messages(
         profile=profile,
@@ -192,13 +238,127 @@ def generate_teaching_content(
         conversation_history=conversation_history,
         student_message=student_message,
         retrieval_chunks=chunks,
+        include_risk_assessment=include_risk_assessment,
     )
 
     result = _call_llm_or_mock(messages, TeachingContent, mock_llm_response)
     return TeachingContent(**result)
 
 
-# ── Teaching Summary ──
+# ── Streaming Teaching Content ──
+
+import re as _re  # noqa: E402
+
+_META_RE = _re.compile(r"<!--META:(.*?)-->", _re.DOTALL)
+
+
+def stream_teaching_content(
+    *,
+    profile: Any = None,
+    selected_skill: str = "",
+    teaching_plan_steps: list[Any] | None = None,
+    current_step: int = 1,
+    conversation_history: list[dict[str, str]] | None = None,
+    student_message: str = "",
+    retriever: DBTRetriever | None = None,
+    retrieval_query: str = "",
+    prefetched_chunks: list[dict[str, Any]] | None = None,
+):
+    """Stream teaching content generation, yielding SSE-style events.
+
+    Yields dicts with keys:
+      - {"type": "content", "text": "..."}  — incremental text delta
+      - {"type": "done", "teaching_content": {...}}  — final structured result
+      - {"type": "error", "message": "..."}  — on failure
+
+    The LLM outputs natural language with metadata in an HTML comment
+    (<!--META:{...}-->) at the end.  The comment is filtered from the
+    stream so the user only sees the teaching content.
+    """
+    from .llm_client import APIError, ConfigurationError, minimax_chat_completion_stream
+    from .prompts import build_streaming_teaching_messages
+    from .retriever import get_retriever
+
+    # ── RAG retrieval ──
+    ret = retriever or get_retriever(k=3, use_case="teaching")
+    query = retrieval_query or f"{selected_skill} {student_message}"
+    try:
+        chunks = ret.search_with_context(query)
+    except Exception:
+        chunks = []
+    if prefetched_chunks:
+        seen_ids = {c.get("chunk_id") for c in chunks if c.get("chunk_id")}
+        for pc in prefetched_chunks:
+            if pc.get("chunk_id") not in seen_ids:
+                seen_ids.add(pc.get("chunk_id"))
+                chunks.append(pc)
+
+    # ── Build messages & stream ──
+    messages = build_streaming_teaching_messages(
+        profile=profile,
+        selected_skill=selected_skill,
+        teaching_plan_steps=teaching_plan_steps,
+        current_step=current_step,
+        conversation_history=conversation_history,
+        student_message=student_message,
+        retrieval_chunks=chunks,
+    )
+
+    try:
+        stream = minimax_chat_completion_stream(messages)
+    except (ConfigurationError, APIError) as exc:
+        yield {"type": "error", "message": str(exc)}
+        return
+
+    full_text = ""
+    streaming_content = True
+    for item in stream:
+        if streaming_content and item == "[STREAM_DONE]":
+            streaming_content = False
+            continue
+        if streaming_content:
+            # Content delta — yield directly, frontend filters META comment
+            yield {"type": "content", "text": item}
+        else:
+            # Final accumulated text (after [STREAM_DONE] sentinel)
+            full_text = item
+
+    # Parse final result from accumulated full text
+    teaching_content = _parse_streaming_content(full_text, chunks)
+    yield {"type": "done", "teaching_content": teaching_content}
+    logger.debug("Streaming teaching complete: %d chars", len(teaching_content.get("content", "")))
+
+
+def _parse_streaming_content(full_text: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Parse the streaming LLM output into a TeachingContent-compatible dict.
+
+    Extracts metadata from <!--META:{...}--> and cleans the content.
+    Falls back to sensible defaults if metadata parsing fails.
+    """
+    meta_match = _META_RE.search(full_text)
+    meta: dict[str, Any] = {}
+    if meta_match:
+        try:
+            meta = json.loads(meta_match.group(1))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Remove the meta comment from displayed content
+    clean_content = _META_RE.sub("", full_text).strip()
+
+    source_ids = [c.get("chunk_id", "") for c in chunks if c.get("chunk_id")]
+
+    return {
+        "content": clean_content,
+        "message_type": meta.get("message_type", "讲解"),
+        "image_prompt": meta.get("image_prompt", ""),
+        "question": meta.get("question", ""),
+        "confidence": 0.8,
+        "source_chunk_ids": source_ids,
+        "risk_level": meta.get("risk_level", "无"),
+        "should_stop_session": meta.get("should_stop_session", False),
+        "risk_reasoning": meta.get("risk_reasoning", ""),
+    }
 
 def generate_teaching_summary(
     *,

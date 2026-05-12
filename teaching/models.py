@@ -12,6 +12,7 @@ class TeachingSession(models.Model):
 
     class Phase(models.TextChoices):
         PRE_MOOD_RECORDING = "pre_mood_recording", "教学前心情记录"
+        PERSONAL_INQUIRY = "personal_inquiry", "个人情况了解"
         INFO_COLLECTION = "info_collection", "信息收集"
         SKILL_SELECTION = "skill_selection", "技能选择"
         RAG_RETRIEVAL_FOR_TEACHING = "rag_retrieval_for_teaching", "RAG教学检索"
@@ -40,6 +41,7 @@ class TeachingSession(models.Model):
     )
     pre_mood_id = models.CharField(max_length=36, blank=True, default="")
     post_mood_id = models.CharField(max_length=36, blank=True, default="")
+    personal_context = models.TextField(blank=True, default="")
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

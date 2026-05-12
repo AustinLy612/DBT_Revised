@@ -28,7 +28,7 @@ TTS_ENDPOINT = "/v1/t2a_v2"
 ASR_ENDPOINT = "/v1/audio/transcription"
 
 # ── Default models ──
-DEFAULT_IMAGE_MODEL = "image-01"
+DEFAULT_IMAGE_MODEL = "image-01-live"
 DEFAULT_IMAGE_LIVE_MODEL = "image-01-live"
 DEFAULT_TTS_MODEL = "speech-2.8-hd"
 DEFAULT_TTS_HD_MODEL = "speech-2.8-hd"

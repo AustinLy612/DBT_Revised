@@ -4,6 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}DBT 技能教学平台{% endblock %}</title>
+    <style>
+        /* Alpine.js FOUC prevention */
+        [x-cloak] { display: none !important; }
+        /* Skeleton shimmer for AI response loading */
+        @keyframes shimmer{0%{background-position:-200px 0}100%{background-position:calc(200px + 100%) 0}}
+        .skeleton{background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);background-size:200px 100%;animation:shimmer 1.5s ease-in-out infinite;border-radius:6px}
+        .htmx-indicator{opacity:0;transition:opacity .2s ease-in}
+        .htmx-request .htmx-indicator{opacity:1}
+        .htmx-request.htmx-indicator{opacity:1}
+    </style>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/static/django_htmx/htmx.min.js"></script>
     <script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
@@ -26,7 +36,7 @@
     <main class="max-w-5xl xl:max-w-6xl mx-auto px-4 py-6">
         {% block content %}{% endblock %}
     </main>
-    <script src="/static/js/media.js?v=20260510"></script>
+    <script src="/static/js/media.js?v=20260512c"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

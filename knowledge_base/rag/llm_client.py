@@ -145,6 +145,96 @@ def minimax_chat_completion(
     raise last_error  # type: ignore[misc]
 
 
+def minimax_chat_completion_stream(
+    messages: list[dict[str, str]],
+    *,
+    model: str = DEFAULT_MODEL,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    extra_body: dict[str, Any] | None = None,
+):
+    """Stream MiniMax ChatCompletion and yield content deltas via SSE.
+
+    Yields each incremental content chunk as a plain string. The final
+    yield is the full accumulated text (so callers can parse it for
+    structured fields after the stream ends).
+
+    Args:
+        messages: List of {"role": "...", "content": "..."} dicts.
+        model: MiniMax model ID.
+        temperature: Sampling temperature.
+        max_tokens: Maximum output tokens.
+        extra_body: Optional extra fields to merge into the request body.
+
+    Yields:
+        str — incremental content deltas followed by sentinel "[STREAM_DONE]"
+        followed by the full accumulated text.
+
+    Raises:
+        ConfigurationError: If MINIMAX_API_KEY is not set.
+        APIError: If the API returns an error.
+    """
+    api_key = _get_api_key()
+    base_url = _get_base_url()
+    url = f"{base_url}{CHAT_ENDPOINT}"
+
+    body: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "mask_sensitive_info": True,
+        "stream": True,
+    }
+
+    if extra_body is not None:
+        body.update(extra_body)
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    logger.debug("MiniMax streaming API call: model=%s, msg_count=%d", model, len(messages))
+
+    try:
+        resp = requests.post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
+    except requests.Timeout:
+        raise APIError(f"MiniMax streaming API timed out after {API_TIMEOUT_SECONDS}s")
+    except requests.ConnectionError as exc:
+        raise APIError(f"MiniMax streaming API connection failed: {exc}") from exc
+
+    if resp.status_code != 200:
+        raise APIError(f"MiniMax streaming API returned {resp.status_code}: {_extract_error(resp)}")
+
+    accumulated: list[str] = []
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line:
+            continue
+        if not line.startswith("data: "):
+            continue
+        data_str = line[6:]
+        if data_str == "[DONE]":
+            break
+        try:
+            data = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+        choices = data.get("choices", [])
+        if not choices:
+            continue
+        delta = choices[0].get("delta", {})
+        content = delta.get("content", "")
+        if content:
+            accumulated.append(content)
+            yield content
+
+    full_text = "".join(accumulated)
+    logger.debug("MiniMax stream complete: %d chars", len(full_text))
+    yield "[STREAM_DONE]"
+    yield full_text
+
+
 def _extract_error(resp: requests.Response) -> str:
     """Best-effort error extraction from a non-200 response."""
     try:

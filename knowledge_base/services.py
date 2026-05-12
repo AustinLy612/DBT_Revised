@@ -1,7 +1,10 @@
+import hashlib
+import json
 import logging
 from typing import Any
 
 import numpy as np
+import redis as redis_lib
 from django.conf import settings
 from django.db import connections
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -18,12 +21,46 @@ EMBEDDING_DIM = 1024
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K_DEFAULT = 5
+RAG_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 _embedding_model: SentenceTransformer | None = None
 _qdrant_client: QdrantClient | None = None
 
-
 _embedding_load_failed: bool = False
+_embedding_preload_started: bool = False
+
+
+def preload_embedding_model() -> None:
+    """Preload the embedding model in a background thread at Django startup.
+
+    Safe to call multiple times — only the first call does work.
+    Call this from AppConfig.ready() so the model is warm before the
+    first user request triggers a semantic search.
+    """
+    global _embedding_model, _embedding_load_failed, _embedding_preload_started
+    if _embedding_preload_started or _embedding_load_failed:
+        return
+    _embedding_preload_started = True
+    try:
+        logger.info("Preloading embedding model: %s", EMBEDDING_MODEL_NAME)
+        _embedding_model = SentenceTransformer(
+            EMBEDDING_MODEL_NAME, local_files_only=True
+        )
+        logger.info("Embedding model preloaded successfully: %s", EMBEDDING_MODEL_NAME)
+    except Exception:
+        logger.warning(
+            "Local cache miss for %s during preload, attempting network load.",
+            EMBEDDING_MODEL_NAME,
+        )
+        try:
+            _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+            logger.info("Embedding model loaded via network: %s", EMBEDDING_MODEL_NAME)
+        except Exception:
+            _embedding_load_failed = True
+            logger.exception(
+                "Failed to preload embedding model %s. Semantic search disabled.",
+                EMBEDDING_MODEL_NAME,
+            )
 
 
 def get_embedding_model() -> SentenceTransformer | None:
@@ -60,6 +97,68 @@ def get_qdrant_client() -> QdrantClient:
             host=settings.QDRANT_HOST, port=settings.QDRANT_PORT
         )
     return _qdrant_client
+
+
+_redis_client: redis_lib.Redis | None = None
+
+
+def get_redis_client() -> redis_lib.Redis | None:
+    """Return a Redis client for caching, or None if Redis is unavailable."""
+    global _redis_client
+    if _redis_client is None:
+        try:
+            _redis_client = redis_lib.Redis(
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_DB,
+                password=settings.REDIS_PASSWORD or None,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            _redis_client.ping()
+        except Exception:
+            logger.warning("Redis unavailable — RAG cache disabled")
+            _redis_client = False  # type: ignore[assignment]
+            return None
+    if _redis_client is False:
+        return None
+    return _redis_client
+
+
+def _rag_cache_key(query: str, top_k: int) -> str:
+    """Build a deterministic cache key for a RAG search query."""
+    payload = f"{query}|{top_k}"
+    digest = hashlib.sha256(payload.encode()).hexdigest()[:16]
+    return f"rag:search:{digest}"
+
+
+def _rag_cache_get(query: str, top_k: int) -> list[dict[str, Any]] | None:
+    """Read cached hybrid_search results from Redis."""
+    client = get_redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(_rag_cache_key(query, top_k))
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return None
+
+
+def _rag_cache_set(query: str, top_k: int, results: list[dict[str, Any]]) -> None:
+    """Cache hybrid_search results in Redis with a 5-minute TTL."""
+    client = get_redis_client()
+    if client is None:
+        return
+    try:
+        client.setex(
+            _rag_cache_key(query, top_k),
+            RAG_CACHE_TTL_SECONDS,
+            json.dumps(results, ensure_ascii=False),
+        )
+    except Exception:
+        pass
 
 
 def extract_sections(text: str) -> list[dict[str, str]]:
@@ -174,15 +273,54 @@ def ensure_mongodb_text_index() -> None:
 
 
 def keyword_search(query: str, top_k: int = TOP_K_DEFAULT) -> list[dict[str, Any]]:
-    """Search chunks by keyword using MongoDB $regex (Chinese-compatible)."""
-    import re as _re
+    """Search chunks by keyword using MongoDB $text index.
 
+    Falls back to $regex when $text returns no results (e.g. short
+    single-character queries that don't match any text-index tokens).
+    """
     ensure_mongodb_text_index()
     connection = connections["default"]
     db = connection.database
     collection = db["knowledge_chunks"]
 
     terms = [t for t in query.split() if t]
+    if not terms:
+        return []
+
+    search_query = " ".join(terms)
+
+    # Use $text search — leverages the chunk_text_text index for fast lookup
+    try:
+        cursor = collection.find(
+            {"$text": {"$search": search_query}},
+            {"score": {"$meta": "textScore"}},
+        ).sort([("score", {"$meta": "textScore"})]).limit(top_k)
+
+        results = []
+        for doc in cursor:
+            results.append({
+                "chunk_id": doc["chunk_id"],
+                "document_id": doc["document_id"],
+                "chunk_text": doc.get("chunk_text", ""),
+                "score": round(doc.get("score", 0), 4),
+                "source": "keyword",
+            })
+
+        if results:
+            return results
+    except Exception:
+        logger.exception("MongoDB $text search failed, falling back to $regex")
+
+    # Fallback: $regex for queries that $text can't match
+    return _keyword_search_regex(terms, collection, top_k)
+
+
+def _keyword_search_regex(
+    terms: list[str], collection, top_k: int
+) -> list[dict[str, Any]]:
+    """Fallback keyword search using $regex when $text returns no results."""
+    import re as _re
+
     if len(terms) == 1:
         regex = _re.escape(terms[0])
     else:
@@ -241,7 +379,16 @@ def semantic_search(query: str, top_k: int = TOP_K_DEFAULT) -> list[dict[str, An
 
 
 def hybrid_search(query: str, top_k: int = TOP_K_DEFAULT) -> list[dict[str, Any]]:
-    """Combine keyword and semantic search, deduplicate by chunk_id."""
+    """Combine keyword and semantic search, deduplicate by chunk_id.
+
+    Results are cached in Redis for 5 minutes to eliminate redundant
+    MongoDB + Qdrant lookups when the same skill is queried repeatedly
+    within a teaching session.
+    """
+    cached = _rag_cache_get(query, top_k)
+    if cached is not None:
+        return cached
+
     kw_results = keyword_search(query, top_k)
     try:
         sem_results = semantic_search(query, top_k)
@@ -263,7 +410,9 @@ def hybrid_search(query: str, top_k: int = TOP_K_DEFAULT) -> list[dict[str, Any]
             r["source"] = "hybrid"
             merged.append(r)
 
-    return merged[:top_k]
+    merged = merged[:top_k]
+    _rag_cache_set(query, top_k, merged)
+    return merged
 
 
 def log_retrieval(

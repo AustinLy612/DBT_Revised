@@ -128,12 +128,15 @@ Configuration variables that MUST change for production:
 
 ### 9. Data Flow for a Teaching Session
 ```
-User Login → Pre-Mood Recording → Info Collection (AI reads profile + history)
-  → Skill Selection (AI + RAG) → RAG Retrieval → Dialogue Teaching
+User Login → Pre-Mood Recording → Personal Inquiry (AI asks about recent experiences)
+  → Info Collection (AI reads profile + history) → Skill Selection (AI + RAG, informed by personal context)
+  → RAG Retrieval → Dialogue Teaching
   → Auto-Transition to Test → Test Generation (AI + RAG) → Per-Question Answer + Explanation
   → Test Result → Retest or Pass → Post-Mood Recording → Achievement Check → Save All Records
 ```
 Risk detection (keyword + AI semantic) runs during teaching and testing. If triggered, session stops immediately.
+
+The **personal inquiry** phase (added 2026-05-12) is a key design element: before recommending a DBT skill, the AI first asks the student a warm, empathetic question about their recent experiences. The student's personal context then becomes the most important input for skill recommendation, combined with questionnaire data, teaching history, and test performance.
 
 ### 10. Account & Auth Module (Step 2)
 
@@ -477,16 +480,18 @@ PointStruct(
 )
 ```
 
-### 27. Hybrid Retrieval Architecture (Step 5)
+### 27. Hybrid Retrieval Architecture (Step 5, Optimized Step 13)
+
+**Redis cache layer** (Step 13): `hybrid_search()` first checks Redis (`rag:search:<sha256>`, 5-min TTL). Cache hit returns immediately. Cache miss runs both paths, caches the merged result. Cache gracefully degrades if Redis is unavailable.
 
 Two independent retrieval paths merged at the application layer:
 
 **Keyword search** (`services.py::keyword_search`):
-- Uses MongoDB `$regex` with PCRE lookaheads for multi-term queries
-- Single term: direct regex match (`"正念"` matches any string containing "正念")
-- Multiple terms: lookahead regex (`^(?=.*term1)(?=.*term2).*$`)
-- Relevance score: fraction of query terms matched in chunk_text
-- Builds text index infrastructure (`ensure_mongodb_text_index`) even though `$text` isn't used (preserving the capability for future Atlas Search migration)
+- Uses MongoDB `$text` operator with the `chunk_text_text` index for fast token-based lookup
+- Falls back to `$regex` with PCRE lookaheads when `$text` returns no results (e.g. single CJK characters)
+- Multi-term queries: space-joined search string → `$text` OR semantics; fallback uses lookahead regex
+- Relevance score: MongoDB `textScore` (TF-IDF-based) for `$text` path; fraction of query terms matched for `$regex` fallback
+- `_keyword_search_regex()` extracted as standalone fallback function with `re.escape()` for metacharacter safety
 
 **Semantic search** (`services.py::semantic_search`):
 - Encodes query with same model → normalized vector
@@ -532,13 +537,13 @@ Admin clicks "增加 knowledge document"
 
 **Metadata field parsing**: `scenario_tags` and `risk_flags` accept both JSON arrays (`["校园", "家庭"]`) and comma-separated values (`校园, 家庭`) in the admin form. The `clean_*` methods normalize both formats into Python lists.
 
-### 30. MongoDB Text Search Limitation & Workaround
+### 30. MongoDB Text Search — $text with $regex Fallback (Updated Step 13 Optimization)
 
-**Why `$regex` instead of `$text`**: MongoDB's text indexes use language-specific stemming and tokenization. The default language is English, which tokenizes on whitespace and punctuation. Chinese text like "正念是核心基础技能" has no whitespace between words, so the entire string is treated as one token. Searching for "正念" with `$text` returns zero matches because "正念" ≠ "正念是核心基础技能" (they are different tokens).
+**Adopted solution (2026-05-11)**: `keyword_search()` now uses MongoDB's `$text` operator as the primary path, with `$regex` as fallback. MongoDB 7.0's ICU-based Unicode text segmentation tokenizes Chinese text into overlapping bigrams, enabling `$text` to match CJK substrings. The `chunk_text_text` index (created in `ensure_mongodb_text_index()`) is now actively used for querying.
 
-**Current solution**: `$regex` pattern matching provides substring search that works correctly for Chinese. The `chunk_text_text` index is still created (for future Atlas Search or Chinese tokenizer plugin integration), but actual search bypasses it.
+**Fallback trigger**: When `$text` returns zero results — typically for single CJK characters that don't form complete bigram tokens — the function falls through to `_keyword_search_regex()`. This preserves the substring-matching correctness for edge cases while gaining indexed performance for the common case.
 
-**Future path**: MongoDB Atlas Search supports `lucene.standard` analyzer with CJK tokenization. If Atlas is adopted, the text index infrastructure is already in place.
+**Why this works now**: Previous analysis (pre-optimization) noted that Chinese text with `default_language: english` tokenizes the entire string as one token. However, MongoDB 7.0+ with ICU performs CJK bigram tokenization even with default language settings. "正念是核心基础技能" tokenizes into overlapping bigrams: "正念", "念是", "是核", "核心", "心基", "基础", "础技", "技能". A `$text` search for "正念" matches the bigram "正念" in the indexed tokens.
 
 ### 33. Security Invariants (Steps 1-5 Audit)
 
@@ -607,13 +612,19 @@ knowledge_base/rag/
 
 The 6 schemas map to the 6 DBT sub-flows:
 ```
-SkillSelectionResult  → "根据学生档案和已学技能推荐下一个技能"
+SkillSelectionResult  → "根据学生档案和历史记录，推荐一个模块下的具体技能（如正念→观察呼吸）"
 TeachingPlan          → "制定结构化的分步教学计划"
 TeachingContent       → "生成单条教学对话消息"
 TeachingSummary       → "教学会话结束后生成总结"
 TestQuestions         → "根据教学总结生成5道情景选择题"
 RiskAssessment        → "评估用户消息是否存在风险"
 ```
+
+**SkillSelectionResult** now includes both `selected_module` and `selected_skill`:
+- `selected_module`: The DBT module (正念 / 情绪调节 / 痛苦耐受 / 人际效能)
+- `selected_skill`: The specific skill within that module (e.g. 观察呼吸, STOP技能, 情绪命名)
+- This enforces specific skill recommendation rather than broad module-level selection.
+- The prompt includes a module→skills mapping so the LLM understands the hierarchy.
 
 **`llm_client.py`** — Thin wrapper around MiniMax ChatCompletion API:
 - Endpoint: `https://api.minimaxi.com/v1/text/chatcompletion_v2`
@@ -631,6 +642,15 @@ RiskAssessment        → "评估用户消息是否存在风险"
 - Two universal rules injected into every system prompt:
   - `_DBT_FABRICATION_RULE`: "禁止编造具体的DBT数据" — prevents hallucination of case studies, statistics, or specific patient data
   - `_JSON_OUTPUT_RULE`: "必须输出合法JSON" — enforces structured output format
+
+**Skill selection prompt design** (`_SKILL_SELECTION_SYSTEM`): The prompt embeds the full DBT skill hierarchy so the LLM can recommend specific skills (not broad modules):
+```
+正念（核心基础）→ 观察呼吸、身体扫描、正念行走、正念饮食、观察-描述-参与、不评判练习
+情绪调节 → 情绪命名、情绪追踪、相反行动、ABC情绪分析、事实核查
+痛苦耐受 → STOP技能、TIP技能、转移注意力、自我安抚（五感）、接受现实
+人际效能 → DEAR MAN沟通法、GIVE技巧、FAST技巧、设置边界
+```
+Recommendation priority: unlearned skills first → matched to concern tags → weak areas from test history → age/grade-appropriate difficulty. The output requires both `selected_module` and `selected_skill` fields.
 
 **`retriever.py`** — `DBTRetriever(BaseRetriever)` bridges LangChain and the existing hybrid search:
 - `_get_relevant_documents(query)`: returns `list[langchain_core.Document]` with `page_content` + `metadata` (chunk_id, document_id, source, score)
@@ -704,6 +724,23 @@ This pattern ensures `plan.plan_steps` (list of `TeachingPlanStep` Pydantic obje
 
 **Existing safety**: `_format_profile()` already handles both types via `isinstance(profile, dict)` check. `_format_chunks()` always receives dicts from `hybrid_search()`. `conversation_history` is always `list[dict[str, str]]` from the chat session.
 
+### 36b. Teaching Plan Step Context Pre-Fetch (Step 13 Optimization)
+
+When `run_teaching_plan()` generates a teaching plan, it now pre-fetches RAG chunks for each plan step and stores them parallel to `plan_steps`:
+
+```python
+# teaching/services.py::run_teaching_plan()
+step_retriever = get_retriever(k=3, user=user, session=session, use_case="teaching")
+for step in plan_steps:
+    chunks = step_retriever.search_with_context(f"{skill} {step_text}")
+    step_contexts.append(chunks)
+plan_dict["step_contexts"] = step_contexts  # list[list[dict]]
+```
+
+During teaching (`generate_teaching_response()`), the current step's pre-fetched context is passed to `generate_teaching_content(prefetched_chunks=...)`. The chain merges pre-fetched chunks into the dynamic retrieval results (deduplicated by `chunk_id`), giving the LLM broader context without additional round-trips.
+
+**Interaction with Redis cache (Opt 7)**: Pre-fetch calls `hybrid_search()` which is Redis-cached. Subsequent messages in the same step benefit from both the warm cache and the pre-fetched context, minimizing backend queries.
+
 ### 37. LLM Client: MiniMax-Specific Design Decisions
 
 | Decision | Rationale |
@@ -731,6 +768,29 @@ get_embedding_model() returns None
 ```
 
 The `_embedding_load_failed` flag prevents retry storms — once loading fails, it stays failed for the process lifetime. This avoids repeated timeout/error cycles on every semantic search attempt.
+
+### 38b. Embedding Model Preloading at Startup (Step 13 Optimization)
+
+To eliminate ~9s cold-start latency on the first semantic search request, the model is preloaded in a background thread at Django startup:
+
+```python
+# knowledge_base/apps.py::KnowledgeBaseConfig.ready()
+if os.environ.get("RUN_MAIN") == "true":
+    return  # Skip Django auto-reloader child process
+
+from .services import preload_embedding_model
+t = threading.Thread(target=preload_embedding_model, daemon=True)
+t.start()
+```
+
+**Preload function** (`preload_embedding_model()`):
+- Idempotent: `_embedding_preload_started` flag prevents double-loading
+- Tries `local_files_only=True` first (fast, ~1s from cache)
+- Falls back to network load on cache miss
+- Sets `_embedding_load_failed=True` if both fail, `get_embedding_model()` will return `None`
+- Runs in a daemon thread — Django startup is not blocked
+
+**Result**: The 2.12GB `BAAI/bge-m3` model is loaded and warm by the time a user logs in and navigates to the teaching page, removing embedding loading from the critical request path.
 
 ### 39. Mock LLM Response Pattern for Testing
 
@@ -776,29 +836,32 @@ The raw dicts from `search_with_context()` contain `chunk_text`, `score`, `sourc
 
 ### 41. Teaching Session State Machine (Step 7)
 
-The teaching session orchestrates 8 states — 5 transitional phases tracked as `TeachingSession.Phase` and 3 terminal outcomes tracked as `TeachingSession.Status`:
+The teaching session orchestrates 9 states — 6 transitional phases tracked as `TeachingSession.Phase` and 3 terminal outcomes tracked as `TeachingSession.Status`:
 
 ```
 Phase flow (forward-moving):
-  pre_mood_recording → info_collection → skill_selection → rag_retrieval_for_teaching → teaching
+  pre_mood_recording → personal_inquiry → info_collection → skill_selection
+    → rag_retrieval_for_teaching → teaching
 
 Status outcomes (terminal, reachable from any phase):
   → completed / stopped_by_risk / user_terminated
 ```
 
-**Why Phase + Status decoupling**: The 3 terminal statuses are mutually exclusive and can be reached from any phase (e.g., risk detection stops session during teaching; user terminates during skill_selection). The 5 phases form a forward-moving sequence that's never skipped backward. Keeping them separate means Phase tracks "where am I in the flow" and Status tracks "did it end normally or abnormally."
+**Why Phase + Status decoupling**: The 3 terminal statuses are mutually exclusive and can be reached from any phase (e.g., risk detection stops session during teaching; user terminates during skill_selection). The 6 phases form a forward-moving sequence that's never skipped backward. Keeping them separate means Phase tracks "where am I in the flow" and Status tracks "did it end normally or abnormally."
 
 **Phase transition triggers**:
 
 | From → To | Trigger | Service call |
 |-----------|---------|-------------|
-| pre_mood_recording → info_collection | User submits mood | `run_pre_mood()` |
-| info_collection → skill_selection | System auto-advances after data gathering | `run_info_collection()` → auto-calls skill selection |
+| pre_mood_recording → personal_inquiry | User submits mood | `run_pre_mood()` |
+| personal_inquiry → info_collection → skill_selection | User shares personal context | `run_personal_inquiry()` → `run_info_collection()` → auto-calls skill selection |
 | skill_selection → rag_retrieval_for_teaching | User confirms skill | `run_teaching_plan()` → calls `run_rag_retrieval()` internally |
 | rag_retrieval_for_teaching → teaching | System auto-advances after retrieval | `run_teaching_plan()` continues |
 | (any) → completed | User ends session | `generate_session_summary()` |
 | (any) → stopped_by_risk | Risk detected | `process_risk_check()` |
 | (any) → user_terminated | User terminates | `terminate_session()` |
+
+**The personal_inquiry phase** (added 2026-05-12): Before skill recommendation, the AI generates a warm, empathetic question based on the student's profile and pre-mood. The student shares their recent experiences, which becomes the most important input for skill selection.
 
 **Model** (`teaching/models.py`):
 
@@ -806,6 +869,7 @@ Status outcomes (terminal, reachable from any phase):
 class TeachingSession(models.Model):
     class Phase(models.TextChoices):
         PRE_MOOD_RECORDING = "pre_mood_recording", "教学前心情记录"
+        PERSONAL_INQUIRY = "personal_inquiry", "个人情况了解"
         INFO_COLLECTION = "info_collection", "信息收集"
         SKILL_SELECTION = "skill_selection", "技能选择"
         RAG_RETRIEVAL_FOR_TEACHING = "rag_retrieval_for_teaching", "RAG教学检索"
@@ -818,7 +882,7 @@ class TeachingSession(models.Model):
         USER_TERMINATED = "user_terminated", "用户终止"
 ```
 
-The `max_length=30` on the phase field accommodates the longest phase name (`rag_retrieval_for_teaching`, 26 chars).
+New field: `personal_context = models.TextField(blank=True, default="")` — stores the student's recent experiences shared during the personal_inquiry phase.
 
 ### 42. Teaching Service Orchestration Layer (Step 7)
 
@@ -830,13 +894,17 @@ The `max_length=30` on the phase field accommodates the longest phase name (`rag
 |----------|-------|--------|---------------|
 | `create_session()` | — | TeachingSession | — |
 | `run_pre_mood()` | — | MoodRecord, TeachingSession.pre_mood_id, phase | — |
-| `run_info_collection()` | UserProfile, TeachingSession history, **Test records** | TeachingSession (phase, selected_skill, selection_reason, rag_context_ids) | `generate_skill_selection` |
+| `generate_inquiry_question()` | UserProfile, MoodRecord | — | `generate_personal_inquiry` |
+| `run_personal_inquiry()` | — | TeachingSession.personal_context | — |
+| `run_info_collection()` | UserProfile, TeachingSession history, **Test records**, **personal_context**, **pre_mood** | TeachingSession (phase, selected_skill, selection_reason, rag_context_ids) | `generate_skill_selection` |
 | `run_rag_retrieval()` | Qdrant (via retriever) | TeachingSession.rag_context_ids | — (retriever only) |
 | `run_teaching_plan()` | UserProfile | TeachingSession (teaching_plan, phase, rag_context_ids) | `generate_teaching_plan` |
 | `generate_teaching_response()` | UserProfile, conversation_history | ChatMessage (×2: user + assistant), rag_context_ids | `generate_teaching_content` |
 | `process_risk_check()` | User message, recent_context | RiskEvent, TeachingSession (status, completed_at), ChatMessage (system) | `run_risk_assessment` |
 | `generate_session_summary()` | UserProfile, conversation_history | TeachingSession (teaching_summary, status, completed_at), ChatMessage (system) | `generate_teaching_summary` |
 | `terminate_session()` | — | TeachingSession (status, completed_at) | — |
+
+**Personal context in skill selection** — `run_info_collection()` now passes `session.personal_context` and pre-mood value to `generate_skill_selection()`. The personal context (student's recent experiences shared during the personal_inquiry phase) is the most important input for skill recommendation, prioritized above historical data.
 
 **Test record integration in skill selection** — `run_skill_selection()` and `run_info_collection()` both query `testing.models.Test`:
 
@@ -922,6 +990,16 @@ session.html
 ```
 
 **`templates/teaching/home.html`** — Profile info card + "开始新教学" button + recent session list. Profile card displays: gender (Chinese label), age, grade (Chinese label), hobby tags (joined with `、`), concern tags, other hobby text, updated_at timestamp.
+
+### 44b. Frontend Perceived Performance (Step 13 Optimization)
+
+**Skeleton shimmer** (`base.html` + `session.html`): The sending indicator now renders animated placeholder bars (`.skeleton` class with `shimmer` keyframe animation) that mimic an incoming message bubble — replacing the plain "正在思考..." text. The `shimmer` animation uses a `linear-gradient` sliding across the placeholder, giving a visual cue that content is loading.
+
+**FOUC prevention** (`base.html`): Added `[x-cloak] { display: none !important; }` CSS rule. Alpine.js removes the `x-cloak` attribute on initialization, preventing unstyled content flash before Alpine.js hydrates.
+
+**HTMX indicator transitions** (`base.html`): Smooth opacity fade-in/fade-out (`.2s ease-in`) on `.htmx-indicator` elements via CSS transitions instead of instant show/hide.
+
+**Image lazy loading** (existing, verified): All `<img>` tags in `messages_partial.html` and `session.html` use `loading="lazy"` to defer off-screen image loading.
 
 **`templates/teaching/messages_partial.html`** — HTMX partial template. Renders all `conversation` messages with role-based styling. When `is_terminal=True`, shows a "会话已中止" banner. Used exclusively by `send_message_view` as an HTMX response.
 
@@ -1475,17 +1553,25 @@ def process_test_risk(test, user, text, recent_answers):
     return _do_check(test, user, text, recent_answers)
 ```
 
-### 68. Dual-Channel Risk Detection Model (Step 10)
+### 68. Dual-Channel Risk Detection Model (Step 10, Optimized Step 13)
 
-Both `process_risk_check` (teaching) and `process_test_risk_check` (testing) implement the same dual-channel pattern:
+Both `process_risk_check` (teaching) and `process_test_risk_check` (testing) implement dual-channel detection. After the Step 13 performance optimization, the teaching flow uses a **conditional dual-channel** pattern:
 
 ```
 Every message text
-    ├── Channel 1: Keyword matching (fast, synchronous)
+    ├── Channel 1: Keyword matching (fast, synchronous, always runs)
     │       check_keyword_risk(text) → (triggered, keywords[])
     │
-    └── Channel 2: AI semantic assessment (LLM-based)
-            run_risk_assessment(user_message, context, keywords) → RiskAssessment
+    ├── IF keyword_triggered: Channel 2 (separate LLM call, safety-critical path)
+    │       run_risk_assessment(user_message, context, keywords) → RiskAssessment
+    │
+    └── IF NOT keyword_triggered: Risk embedded in teaching LLM call
+            generate_teaching_content(include_risk_assessment=True)
+            → TeachingContent (with risk_level, should_stop_session, risk_reasoning)
+            (Saves 1 LLM API round-trip, ~11s for normal messages)
+```
+
+**Key invariant**: When keywords trigger, the AI channel still runs as a separate call (dual-channel preserved for safety-critical paths). When keywords don't trigger (~99% of messages), risk assessment fields are populated inline by the teaching LLM call — the schema has default values for backwards compatibility.
 
 Only when BOTH channels find nothing:
     triggered == False AND ai_risk_level == "无"
@@ -1495,9 +1581,6 @@ If either channel flags concern:
     → create_risk_event(detection_source=...)
     → if should_stop_session: stop_session_for_risk() / terminate test
     → return risk_dict
-```
-
-**Key invariant**: The AI channel ALWAYS runs, even when no keywords match and no moderate concern indicators are present. This enables semantic detection of expressions like "我觉得很累，不知道该怎么办" that contain no trigger words but convey high risk through context and phrasing.
 
 **Detection source classification** via `_classify_detection_source(keyword_triggered, ai_risk_level)`:
 
@@ -1509,17 +1592,32 @@ If either channel flags concern:
 
 When AI alone flags high risk (`detection_source="ai"`), this represents the semantic channel independently detecting risk that keywords missed — the core value of dual-channel architecture.
 
-### 69. HX-Redirect Risk Popup Pattern (Step 10)
+### 69. HX-Redirect Risk Popup Pattern (Step 10, Optimized Step 13)
 
 When high-risk content is detected during an HTMX request, the standard `HX-Redirect` header triggers a full-page redirect to the risk popup:
 
-**Teaching flow** (`teaching/views.py::send_message_view`):
+**Teaching flow** (`teaching/views.py::send_message_view`) — optimized path:
+
 ```python
-risk_result = services.process_risk_check(session, request.user, student_text, conversation)
-if risk_result and risk_result.get("should_stop_session"):
-    response = HttpResponse(status=HTTPStatus.NO_CONTENT)
-    response["HX-Redirect"] = "/risk/popup/"
-    return response
+# Channel 1: Fast keyword check always runs first
+keyword_triggered, _keywords = check_keyword_risk(student_text)
+
+if keyword_triggered:
+    # Safety-critical path: separate AI risk call (dual-channel preserved)
+    risk_result = services.process_risk_check(...)
+    if risk_result and risk_result.get("should_stop_session"):
+        return HX-Redirect to /risk/popup/
+
+# Normal path: risk assessment merged into teaching LLM call
+response_data = services.generate_teaching_response(
+    ..., include_risk_assessment=True
+)
+
+# Handle risk from merged response
+if response_data.get("should_stop_session"):
+    create_risk_event(detection_source="ai", ...)
+    stop_session_for_risk(...)
+    return HX-Redirect to /risk/popup/
 ```
 
 **Testing flow** (`testing/views.py::answer_question_view`):
@@ -1586,13 +1684,15 @@ media_app/
 
 **Error model**: `ConfigurationError(Exception)` for missing API keys; `APIError(Exception)` for non-200 status, timeout, and connection errors. Views catch both and return user-facing messages without crashing the session.
 
-### 74. Image Generation — Service and Data Flow (Step 11)
+### 74. Image Generation — Service and Data Flow (Step 11, Optimized Step 13)
 
-**Service**: `media_app/services.py::generate_image(prompt, model="image-01", n=1, size="1024x1024")`
+**Service**: `media_app/services.py::generate_image(prompt, model="image-01-live", n=1, size="1024x1024")`
+
+**Default model** (`DEFAULT_IMAGE_MODEL`): Changed from `"image-01"` to `"image-01-live"` (2026-05-11) — the `-live` variant is optimized for real-time interactive scenarios with lower latency.
 
 Calls `POST {MINIMAX_BASE_URL}/v1/image/generation` with Bearer token auth and JSON body:
 ```python
-{"model": "image-01", "prompt": prompt, "n": n, "size": size}
+{"model": "image-01-live", "prompt": prompt, "n": n, "size": size}
 ```
 
 Returns `{"urls": [...], "model": "...", "usage": {...}}`. View extracts `urls[0]` as the temporary image URL.
@@ -1615,6 +1715,28 @@ Browser JS (DBT_Image.generate)
 ```
 
 **PRD compliance**: Image files are NOT persisted. Only the temporary CDN URL (which expires) is stored in `ImageGenerationLog.temporary_image_url`. The log preserves prompt, model, status, and timestamp for audit.
+
+### 74b. Async Image Generation via Celery (Step 13 Optimization)
+
+Teaching auto-generated images (from `image_prompt` in AI responses) are now dispatched to Celery instead of raw daemon threads:
+
+```
+generate_teaching_content() returns image_prompt
+  → _start_image_generation(session, image_prompt)
+  → generate_image_async.delay(session_id, image_prompt)    # fire-and-forget via Redis
+  → Celery worker picks up task
+  → media_app.services.generate_image(prompt)
+  → MiniMax API POST /v1/image/generation
+  → ChatMessage.image_url updated directly in DB
+```
+
+**Task**: `media_app/tasks.py::generate_image_async` — `@shared_task(bind=True, max_retries=2, default_retry_delay=10)`. On failure, auto-retries twice. On success, writes `image_url` to the latest assistant ChatMessage in the session.
+
+**Why Celery over threading.Thread**:
+- Survives gunicorn worker restarts (task re-queued by Redis broker)
+- Doesn't compete for gunicorn worker CPU during image API call (~3-8s)
+- Retry logic is declarative via decorator parameters
+- Task visible in Celery monitoring (Flower or `celery inspect`)
 
 ### 75. TTS Service with Auto-Play Toggle Architecture (Step 11)
 
@@ -2127,3 +2249,63 @@ Two new test classes appended:
 Two new test classes appended:
 - `RetrievalFailureTests` (3 tests): Tests that semantic search returns `[]` when embedding model failed to load, `hybrid_search` returns keyword-only results when semantic search raises `ConnectionError`, and `log_retrieval` propagates DB errors as expected.
 - `StorageFailureTests` (3 tests): Documents current error propagation behavior for MinIO upload/download/delete when `get_minio_client()` raises `ConnectionError`.
+
+---
+
+### §98 SSE Streaming Architecture (Opt 6, 2026-05-11)
+
+Server-Sent Events streaming replaces the old request-response cycle for teaching chat. The pipeline:
+
+```
+Browser (Fetch + ReadableStream)
+  → Nginx (proxy_buffering off, proxy_read_timeout 120s)
+    → Gunicorn/Django (StreamingHttpResponse, text/event-stream)
+      → chains.stream_teaching_content() (generator)
+        → minimax_chat_completion_stream() (requests.iter_lines, stream=True)
+          → MiniMax API (/v1/text/chatcompletion_v2, stream=True)
+```
+
+**Key files:**
+| Layer | File | Change |
+|-------|------|--------|
+| LLM Client | `knowledge_base/rag/llm_client.py` | `minimax_chat_completion_stream()` — `stream=True`, iterates `resp.iter_lines()`, yields content deltas, then `[STREAM_DONE]` sentinel, then full accumulated text |
+| Prompt | `knowledge_base/rag/prompts.py` | `_STREAMING_TEACHING_SYSTEM` — instructs LLM to output natural Chinese with `<!--META:{json}-->` HTML comment at end instead of pure JSON. `build_streaming_teaching_messages()` builds message list |
+| Chain | `knowledge_base/rag/chains.py` | `stream_teaching_content()` — generator: RAG retrieval → build messages → call streaming API → yield `{"type":"content","text":"..."}` SSE events → parse META from full text → yield `{"type":"done","teaching_content":{...}}`. `_parse_streaming_content()` — regex extracts `<!--META:...-->`, returns clean TeachingContent dict |
+| View | `teaching/views.py` | `stream_message_view()` — returns `StreamingHttpResponse(text/event-stream)`, creates user ChatMessage, runs streaming chain generator, creates assistant ChatMessage on "done" event, injects `message_id` into response for TTS button |
+| URL | `teaching/urls.py` | `path("session/<id>/stream/", stream_message_view, name="stream_message")` |
+| Frontend | `static/js/media.js` | `DBT_Stream` object: `send()` — creates user bubble + AI placeholder, fetches SSE stream; `_readStream()` — ReadableStream reader, SSE line parser, dynamic content rendering, META comment stripping, TTS button injection, risk redirect, image gen trigger |
+| Template | `templates/teaching/session.html` | Form changed from `hx-post` to `onsubmit="DBT_Stream.send(event, '...')"`; skeleton shimmer indicator controlled by JS |
+| Nginx | `docker/nginx.conf` | Location `/teaching/session/` with `proxy_buffering off`, `proxy_cache off`, `gzip off`, `proxy_http_version 1.1`, `proxy_read_timeout 120s` |
+
+**SSE event protocol:**
+- `{"type":"content","text":"..."}` — token chunk, frontend appends to bubble
+- `{"type":"done","teaching_content":{...}}` — stream complete, ChatMessage saved, TTS button added
+- `{"type":"error","message":"..."}` — error, shown in bubble
+
+**META comment format:** `<!--META:{"message_type":"讲解","image_prompt":"...","risk_level":"无","should_stop_session":false,"risk_reasoning":""}-->`
+
+HTML comment is invisible in browser DOM; `_parse_streaming_content()` extracts it server-side. Frontend `_metaRe` regex strips it as a safety net.
+
+---
+
+### §99 Post-Deployment Bug Fixes (2026-05-12)
+
+Three production bugs discovered after deploying the streaming optimization:
+
+**Bug 1: Incomplete deployment — static files + nginx config stale**
+- Cause: `docker compose restart web` only restarts gunicorn. Static files in shared volume (`./staticfiles`) and nginx config (bind mount) were not refreshed
+- Impact: `media.js` lacked `DBT_Stream` → form submission fell back to browser default GET (page refresh). Nginx lacked `proxy_buffering off` → SSE would be buffered
+- Fix: `collectstatic --noinput` + `docker compose restart nginx`
+- Prevention: After any static file or nginx config change, run both commands
+
+**Bug 2: DOM ID collision across streaming bubbles**
+- Cause: `_readStream()` used `document.getElementById("streaming-text")` — global lookup. When stream 1 completed, only `aiBubble.id` was cleared; child `<span id="streaming-text">` and `<span id="streaming-cursor">` retained their IDs. Stream 2's `getElementById` returned the first (stale) element
+- Fix: Changed to `aiBubble.querySelector("#streaming-text")` (scoped to current bubble) + explicit child ID cleanup in all completion/error paths
+- Pattern: Always scope DOM queries to the container element, never rely on global IDs for dynamically-created content
+
+**Bug 3: Streaming content formatting**
+- Cause: `textContent` on `<span>` collapses `\n` to whitespace and shows all characters literally (including markdown syntax). The streaming prompt had no formatting restrictions
+- Fix (2-part):
+  1. **Prompt**: Added explicit markdown prohibition + natural paragraph formatting rules to `_STREAMING_TEACHING_SYSTEM`
+  2. **Frontend**: `_escapeHtml()` helper + `innerHTML` rendering with `\n` → `<br>` conversion; raw text preserved for TTS playback
+- Design note: `innerHTML` is used only for LLM-generated content (trusted source); the `_escapeHtml()` helper still prevents any accidental HTML injection via `createTextNode` → `innerHTML` pattern

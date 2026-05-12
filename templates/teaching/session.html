@@ -153,8 +153,40 @@
             </form>
         </div>
 
+    {% elif session.phase == 'personal_inquiry' %}
+        {# ── Personal Inquiry Phase ── #}
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">在开始之前，先聊聊你最近的情况</h2>
+            <p class="text-sm text-gray-500 mb-4">了解你最近的经历和感受，才能为你推荐最适合的技能。</p>
+
+            {% if inquiry_data %}
+            <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-5">
+                <p class="text-sm text-purple-800 mb-3 leading-relaxed">{{ inquiry_data.greeting }}</p>
+                <p class="text-sm text-purple-900 font-medium leading-relaxed">{{ inquiry_data.question }}</p>
+            </div>
+            {% endif %}
+
+            <form method="post" action="{% url 'teaching:personal_inquiry' session.session_id %}">
+                {% csrf_token %}
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-600 mb-1">你的分享</label>
+                    <textarea name="personal_context" rows="4" autofocus
+                              placeholder="分享你最近的经历、感受或任何想说的..."
+                              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-200 focus:border-purple-400 resize-none"></textarea>
+                    <p class="text-xs text-gray-400 mt-1">你可以分享任何事情——最近的心情变化、让你开心或困扰的事、学业或人际关系方面的感受。分享得越多，AI 越能为你推荐合适的技能。</p>
+                </div>
+                <button type="submit" class="w-full bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition">
+                    分享并开始推荐
+                </button>
+            </form>
+
+            <div class="mt-4 text-xs text-gray-400 text-center">
+                <p>你的分享仅用于本次教学推荐，不会被其他人看到。</p>
+            </div>
+        </div>
+
     {% elif session.phase == 'info_collection' %}
-        {# ── Info Collection Phase (auto-transition, shown briefly) ── #}
+        {# ── Info Collection Phase (error recovery / retry) ── #}
         <div class="bg-white border rounded-lg p-6 text-center">
             <h2 class="text-lg font-semibold text-gray-800 mb-2">正在收集你的学习信息</h2>
             <p class="text-sm text-gray-500 mb-4">正在读取你的问卷信息、学习历史和测试记录...</p>
@@ -163,7 +195,7 @@
                 <input type="hidden" name="mood_value" value="3">
                 <input type="hidden" name="auto_continue" value="1">
                 <button type="submit" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">
-                    继续
+                    重试
                 </button>
             </form>
         </div>
@@ -281,26 +313,24 @@
                     </div>
 
                     <div class="border-t p-3">
-                        <form hx-post="{% url 'teaching:send_message' session.session_id %}"
-                              hx-target="#chat-messages"
-                              hx-swap="innerHTML"
-                              hx-indicator="#sending-indicator"
+                        <form onsubmit="DBT_Stream.send(event, '{% url 'teaching:stream_message' session.session_id %}')"
                               class="flex gap-2">
                             {% csrf_token %}
                             <input type="text" name="message" autofocus autocomplete="off" id="chat-input"
                                    placeholder="输入你的想法或问题..."
                                    class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
-                            {# ASR microphone button #}
                             <button type="button" id="mic-btn"
                                     onclick="if(DBT_ASR.isRecording()){DBT_ASR.stop();this.textContent='🎤';this.classList.remove('bg-red-500');this.classList.add('bg-gray-100');document.getElementById('asr-status').textContent=''}else{DBT_ASR.start(function(){document.getElementById('mic-btn').textContent='⏹';document.getElementById('mic-btn').classList.add('bg-red-500');document.getElementById('mic-btn').classList.remove('bg-gray-100')},function(err){var s=document.getElementById('asr-status');if(s&&s.textContent.indexOf('✗')===-1)s.textContent='✗ 语音输入失败'})}"
                                     class="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-200 transition text-sm flex-shrink-0"
                                     title="语音输入">🎤</button>
-                            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
+                            <button type="submit" id="send-btn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
                                 发送
                             </button>
                         </form>
-                        <div id="sending-indicator" class="htmx-indicator text-xs text-gray-400 mt-1">
-                            正在思考...
+                        <div id="sending-indicator" class="mt-1" style="display:none">
+                            <div class="skeleton h-5 w-3/4 mb-1"></div>
+                            <div class="skeleton h-5 w-1/2"></div>
+                            <span class="text-xs text-gray-400">AI 正在思考...</span>
                         </div>
                         <div id="asr-status" class="text-xs text-gray-400 mt-1"></div>
                         <div class="flex justify-end mt-2 gap-2">

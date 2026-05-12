@@ -9,6 +9,8 @@
   let audioChunks = [];
   // Track which audio element is currently playing so we can stop it
   let currentAudio = null;
+  let currentAudioMsgId = null;
+  let isAudioPlaying = false;  // explicit flag — audio.paused is unreliable during buffering
   // TTS auto-play: persisted in localStorage, default ON
   const AUTO_PLAY_STORAGE_KEY = "dbt_tts_autoplay";
 
@@ -27,9 +29,27 @@
     }
   }
 
+  function _setButtonPlaying(msgId) {
+    if (!msgId) return;
+    var btn = document.getElementById("tts-btn-" + msgId);
+    if (btn) { btn.disabled = false; btn.textContent = "⏹"; }
+  }
+
+  function _resetButton(msgId) {
+    if (!msgId) return;
+    var btn = document.getElementById("tts-btn-" + msgId);
+    if (btn) { btn.disabled = false; btn.textContent = "🔊"; }
+  }
+
   // ── TTS: Play text as speech ──
   window.DBT_TTS = {
     play: function (text, messageId) {
+      // If the same message is currently playing, toggle off
+      if (messageId && currentAudioMsgId === messageId && isAudioPlaying) {
+        this.stop();
+        return;
+      }
+
       const btn = document.getElementById("tts-btn-" + messageId);
       if (btn) {
         btn.disabled = true;
@@ -61,9 +81,9 @@
         })
         .then(function (result) {
           if (result.blob) {
-            _playAudioBlob(result.blob);
+            _playAudioBlob(result.blob, messageId);
           } else if (result.audio_url) {
-            _playAudioUrl(result.audio_url);
+            _playAudioUrl(result.audio_url, messageId);
           }
         })
         .catch(function (err) {
@@ -71,7 +91,8 @@
           alert("语音播报失败: " + err.message);
         })
         .finally(function () {
-          if (btn) {
+          // Reset button only if audio isn't playing (error / no playback started)
+          if (btn && !isAudioPlaying) {
             btn.disabled = false;
             btn.textContent = "🔊";
           }
@@ -81,7 +102,11 @@
     stop: function () {
       if (currentAudio) {
         currentAudio.pause();
+        var stoppedMsgId = currentAudioMsgId;
         currentAudio = null;
+        currentAudioMsgId = null;
+        isAudioPlaying = false;
+        _resetButton(stoppedMsgId);
       }
     },
 
@@ -115,7 +140,7 @@
       if (!lastAssistant) return;
       var btn = lastAssistant.querySelector("button[id^='tts-btn-']");
       if (btn) {
-        var text = lastAssistant.textContent.replace(/🔊$/, "").trim();
+        var text = lastAssistant.textContent.replace(/[🔊⏹]$/, "").trim();
         this.play(text, btn.id.replace("tts-btn-", ""));
       }
     },
@@ -124,29 +149,51 @@
   // Sync toggle on load
   document.addEventListener("DOMContentLoaded", _syncToggleUI);
 
-  function _playAudioBlob(blob) {
+  function _playAudioBlob(blob, msgId) {
     DBT_TTS.stop();
     var url = URL.createObjectURL(blob);
     var audio = new Audio(url);
     currentAudio = audio;
+    currentAudioMsgId = msgId || null;
+    isAudioPlaying = true;
+    _setButtonPlaying(msgId);
     audio.onended = function () {
       URL.revokeObjectURL(url);
+      var endedMsgId = currentAudioMsgId;
       currentAudio = null;
+      currentAudioMsgId = null;
+      isAudioPlaying = false;
+      _resetButton(endedMsgId);
     };
     audio.play().catch(function (err) {
       console.error("Audio playback failed:", err);
+      _resetButton(msgId);
+      currentAudio = null;
+      currentAudioMsgId = null;
+      isAudioPlaying = false;
     });
   }
 
-  function _playAudioUrl(url) {
+  function _playAudioUrl(url, msgId) {
     DBT_TTS.stop();
     var audio = new Audio(url);
     currentAudio = audio;
+    currentAudioMsgId = msgId || null;
+    isAudioPlaying = true;
+    _setButtonPlaying(msgId);
     audio.onended = function () {
+      var endedMsgId = currentAudioMsgId;
       currentAudio = null;
+      currentAudioMsgId = null;
+      isAudioPlaying = false;
+      _resetButton(endedMsgId);
     };
     audio.play().catch(function (err) {
       console.error("Audio playback from URL failed:", err);
+      _resetButton(msgId);
+      currentAudio = null;
+      currentAudioMsgId = null;
+      isAudioPlaying = false;
     });
   }
 
@@ -343,6 +390,197 @@
   document.addEventListener("DOMContentLoaded", function () {
     DBT_Chat.scrollToBottom();
   });
+
+  // ── SSE Streaming Chat ──
+  window.DBT_Stream = {
+    _metaRe: /<!--META:.*?-->/g,
+
+    _escapeHtml: function (text) {
+      var div = document.createElement("div");
+      div.appendChild(document.createTextNode(text));
+      return div.innerHTML;
+    },
+
+    send: function (event, streamUrl) {
+      event.preventDefault();
+
+      var form = event.target;
+      var input = form.querySelector("input[name='message']");
+      if (!input) return;
+      var text = input.value.trim();
+      if (!text) return;
+
+      var chatContainer = document.getElementById("chat-messages");
+      var sendBtn = document.getElementById("send-btn");
+      var indicator = document.getElementById("sending-indicator");
+      var csrfInput = form.querySelector("input[name='csrfmiddlewaretoken']");
+
+      // Disable send button
+      if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = "…"; }
+
+      // Add user message bubble
+      var userDiv = document.createElement("div");
+      userDiv.className = "flex justify-end";
+      userDiv.setAttribute("data-role", "user");
+      userDiv.innerHTML = '<div class="max-w-[85%] rounded-lg px-4 py-2 text-sm bg-blue-500 text-white">' +
+        text.replace(/\n/g, "<br>") + "</div>";
+      chatContainer.appendChild(userDiv);
+
+      // Clear input
+      input.value = "";
+
+      // Show skeleton
+      if (indicator) indicator.style.display = "block";
+      DBT_Chat.scrollToBottom();
+
+      // Create assistant bubble placeholder
+      var aiDiv = document.createElement("div");
+      aiDiv.className = "flex justify-start";
+      aiDiv.setAttribute("data-role", "assistant");
+      var aiBubble = document.createElement("div");
+      aiBubble.className = "max-w-[85%] rounded-lg px-4 py-2 text-sm bg-gray-100 text-gray-800";
+      aiBubble.id = "streaming-bubble";
+      aiBubble.innerHTML = '<span id="streaming-text"></span><span class="inline-block w-2 h-4 bg-gray-400 animate-pulse ml-0.5 align-text-bottom" id="streaming-cursor"></span>';
+      aiDiv.appendChild(aiBubble);
+      chatContainer.appendChild(aiDiv);
+      DBT_Chat.scrollToBottom();
+
+      // Build form body
+      var formData = new FormData();
+      formData.append("message", text);
+      formData.append("csrfmiddlewaretoken", csrfInput ? csrfInput.value : "");
+
+      var self = this;
+      fetch(streamUrl, {
+        method: "POST",
+        body: formData,
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      })
+        .then(function (resp) {
+          if (!resp.ok) {
+            return resp.text().then(function (t) { throw new Error("HTTP " + resp.status + ": " + t); });
+          }
+          return self._readStream(resp, aiBubble, indicator, sendBtn, chatContainer);
+        })
+        .catch(function (err) {
+          console.error("Stream error:", err);
+          var streamText = aiBubble.querySelector("#streaming-text");
+          if (streamText) { streamText.innerHTML = self._escapeHtml("错误: " + err.message); streamText.id = ""; }
+          var cursor = aiBubble.querySelector("#streaming-cursor");
+          if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
+          if (indicator) indicator.style.display = "none";
+          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+          if (aiBubble) aiBubble.id = "";
+        });
+    },
+
+    _readStream: function (resp, aiBubble, indicator, sendBtn, chatContainer) {
+      var reader = resp.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = "";
+      var accumulatedText = "";
+      // Scope to aiBubble so each stream targets its own bubble
+      var streamText = aiBubble.querySelector("#streaming-text");
+      var cursor = aiBubble.querySelector("#streaming-cursor");
+      var self = this;
+
+      function _renderContent(text) {
+        // Escape HTML, then convert \n to <br> for visible line breaks
+        if (streamText) {
+          streamText.innerHTML = self._escapeHtml(text).replace(/\n/g, "<br>");
+        }
+      }
+
+      function processChunk() {
+        reader.read().then(function (result) {
+          if (result.done) {
+            // Stream ended — clean up all IDs so next bubble's are unique
+            if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
+            if (indicator) indicator.style.display = "none";
+            if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+            if (streamText) streamText.id = "";
+            if (aiBubble) aiBubble.id = "";
+            // Scroll and trigger TTS auto-play
+            DBT_Chat.scrollToBottom();
+            setTimeout(function () { DBT_TTS.autoPlayLatest(); }, 350);
+            return;
+          }
+
+          buffer += decoder.decode(result.value, { stream: true });
+          var lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line || !line.startsWith("data: ")) continue;
+            var jsonStr = line.substring(6);
+            try {
+              var event = JSON.parse(jsonStr);
+              if (event.type === "content") {
+                accumulatedText += event.text;
+                // Strip META comment from display
+                var clean = accumulatedText.replace(self._metaRe, "");
+                _renderContent(clean);
+                DBT_Chat.scrollToBottom();
+              } else if (event.type === "done") {
+                // Hide skeleton
+                if (indicator) indicator.style.display = "none";
+                if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
+                // Final content — use innerHTML for proper line breaks
+                var finalText = accumulatedText.replace(self._metaRe, "");
+                _renderContent(finalText);
+                if (streamText) streamText.id = "";
+                // Add TTS button
+                var tc = event.teaching_content;
+                var msgId = tc ? (tc.message_id || "") : "";
+                if (aiBubble && msgId) {
+                  aiBubble.id = "";
+                  var ttsBtn = document.createElement("button");
+                  ttsBtn.onclick = function () {
+                    DBT_TTS.play(finalText, msgId);
+                  };
+                  ttsBtn.id = "tts-btn-" + msgId;
+                  ttsBtn.className = "ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom";
+                  ttsBtn.title = "语音播报";
+                  ttsBtn.textContent = "🔊";
+                  aiBubble.appendChild(ttsBtn);
+                }
+                // Check for risk
+                if (tc && tc.should_stop_session) {
+                  window.location.href = "/risk/popup/";
+                  return;
+                }
+                // Handle image generation
+                if (tc && tc.image_prompt) {
+                  DBT_Image.generate(tc.image_prompt, "teaching-image-area", {
+                    source: "teaching_scene",
+                    session_id: window.location.pathname.split("/")[2] || "",
+                  });
+                }
+              } else if (event.type === "error") {
+                var errMsg = event.message || "未知错误";
+                _renderContent(errMsg);
+                if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
+                if (indicator) indicator.style.display = "none";
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+              }
+            } catch (e) {
+              // Skip malformed JSON lines
+            }
+          }
+          processChunk();
+        }).catch(function (err) {
+          console.error("Stream read error:", err);
+          if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
+          if (indicator) indicator.style.display = "none";
+          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+          if (streamText) streamText.id = "";
+        });
+      }
+
+      processChunk();
+    },
+  };
 
   // ── Image Generation ──
   window.DBT_Image = {

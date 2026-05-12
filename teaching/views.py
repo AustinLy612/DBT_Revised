@@ -1,15 +1,17 @@
 """Teaching session views — full state machine.
 
-Phases: pre_mood_recording → info_collection → skill_selection →
+Phases: pre_mood_recording → personal_inquiry → info_collection → skill_selection →
         rag_retrieval_for_teaching → teaching → completed/stopped_by_risk/user_terminated.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from http import HTTPStatus
 
 from django.contrib import messages
+from django.http import StreamingHttpResponse
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -57,11 +59,26 @@ def session_view(request: HttpRequest, session_id: str) -> HttpResponse:
         TeachingSession.Status.USER_TERMINATED,
     )
 
+    # Generate inquiry question for personal_inquiry phase
+    inquiry_data = None
+    if not is_terminal and session.phase == TeachingSession.Phase.PERSONAL_INQUIRY:
+        try:
+            inquiry_data = services.generate_inquiry_question(session, request.user)
+        except (ConfigurationError, APIError) as exc:
+            logger.error("Inquiry question generation failed for session %s: %s",
+                         session.session_id, exc)
+            inquiry_data = {
+                "greeting": "你好！在开始之前，我想先了解一下你的近况。",
+                "question": "最近一周，有什么事情让你感到开心或者有压力吗？愿意和我聊聊吗？",
+                "inquiry_focus": "近期状态",
+            }
+
     return render(request, "teaching/session.html", {
         "session": session,
         "conversation": conversation,
         "is_terminal": is_terminal,
         "plan_steps": session.teaching_plan.get("plan_steps", []) if session.teaching_plan else [],
+        "inquiry_data": inquiry_data,
     })
 
 
@@ -71,13 +88,13 @@ def session_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
 @profile_required
 def record_pre_mood_view(request: HttpRequest, session_id: str) -> HttpResponse:
-    """Record the pre-teaching mood and advance to info_collection."""
+    """Record the pre-teaching mood and advance to personal_inquiry."""
     if request.method != "POST":
         return redirect("teaching:session", session_id=session_id)
 
     session = services.get_session_or_404(session_id, request.user)
 
-    # Allow "继续" from info_collection phase (retry after transient API failure)
+    # Allow retry from info_collection phase (error recovery)
     if session.phase == TeachingSession.Phase.INFO_COLLECTION:
         try:
             services.run_info_collection(session, request.user)
@@ -103,23 +120,51 @@ def record_pre_mood_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
     services.run_pre_mood(session, request.user, mood_value, emoji, note)
 
-    # Auto-run info collection + skill selection
-    try:
-        services.run_info_collection(session, request.user)
-    except (ConfigurationError, APIError) as exc:
-        logger.error("Info collection / skill selection failed for session %s: %s",
-                     session.session_id, exc)
-        session.status = TeachingSession.Status.USER_TERMINATED
-        session.save(update_fields=["status"])
-        messages.error(request, "AI 技能推荐暂时不可用，请稍后再试。")
-        return redirect("teaching:home")
-
-    messages.success(request, f"AI 已推荐技能「{session.selected_skill}」，请确认或修改。")
+    messages.success(request, "心情已记录，请和 AI 教练聊聊你最近的情况吧。")
     return redirect("teaching:session", session_id=session_id)
 
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 2 → 3: Info collection → Skill selection
+# Phase 2: Personal inquiry — understand recent experiences
+# ═══════════════════════════════════════════════════════════════
+
+@profile_required
+def personal_inquiry_view(request: HttpRequest, session_id: str) -> HttpResponse:
+    """Receive the student's personal context and run skill selection.
+
+    GET: redirect to session page (question is shown via template).
+    POST: store personal_context, then run info_collection + skill selection.
+    """
+    if request.method != "POST":
+        return redirect("teaching:session", session_id=session_id)
+
+    session = services.get_session_or_404(session_id, request.user)
+
+    if session.phase != TeachingSession.Phase.PERSONAL_INQUIRY:
+        messages.warning(request, "当前不在个人情况了解阶段。")
+        return redirect("teaching:session", session_id=session_id)
+
+    personal_context = request.POST.get("personal_context", "").strip()
+    if not personal_context:
+        messages.warning(request, "请分享一些你最近的经历或感受。")
+        return redirect("teaching:session", session_id=session_id)
+
+    try:
+        services.run_personal_inquiry(session, request.user, personal_context)
+    except (ConfigurationError, APIError) as exc:
+        logger.error("Info collection / skill selection failed for session %s: %s",
+                     session.session_id, exc)
+        session.phase = TeachingSession.Phase.INFO_COLLECTION
+        session.save(update_fields=["phase"])
+        messages.error(request, "AI 技能推荐暂时不可用，请稍后再试。")
+        return redirect("teaching:session", session_id=session_id)
+
+    messages.success(request, f"AI 已根据你的情况推荐技能「{session.selected_skill}」，请确认或修改。")
+    return redirect("teaching:session", session_id=session_id)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 3 → 4: Info collection → Skill selection
 # ═══════════════════════════════════════════════════════════════
 
 @profile_required
@@ -174,21 +219,49 @@ def send_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
     conversation = services.get_conversation_history(session)
 
-    # Risk check
-    risk_result = services.process_risk_check(session, request.user, student_text, conversation)
-    if risk_result and risk_result.get("should_stop_session"):
-        response = HttpResponse(status=HTTPStatus.NO_CONTENT)
-        response["HX-Redirect"] = "/risk/popup/"
-        return response
+    # ── Risk check ──
+    # Fast keyword check always runs first.
+    # If keywords trigger → separate AI risk call (safety-critical path).
+    # If keywords don't trigger → risk assessment is merged into the teaching
+    #   LLM call below, saving one API round-trip per message.
+    from risk.services import check_keyword_risk
 
-    # Generate AI response
+    keyword_triggered, _keywords = check_keyword_risk(student_text)
+
+    if keyword_triggered:
+        risk_result = services.process_risk_check(session, request.user, student_text, conversation)
+        if risk_result and risk_result.get("should_stop_session"):
+            response = HttpResponse(status=HTTPStatus.NO_CONTENT)
+            response["HX-Redirect"] = "/risk/popup/"
+            return response
+
+    # ── Generate AI response (with embedded risk assessment when safe) ──
     try:
         response_data = services.generate_teaching_response(
-            session, request.user, student_text, conversation
+            session, request.user, student_text, conversation,
+            include_risk_assessment=not keyword_triggered,
         )
     except (ConfigurationError, APIError) as exc:
         logger.error("Teaching response failed for session %s: %s", session.session_id, exc)
         return _htmx_error("AI 教学响应暂时不可用，请稍后再试。")
+
+    # ── Handle risk from merged response ──
+    if not keyword_triggered and response_data.get("should_stop_session"):
+        from risk.services import create_risk_event, stop_session_for_risk
+
+        create_risk_event(
+            user=request.user,
+            session=session,
+            trigger_text=student_text,
+            detection_source="ai",
+            action_taken=response_data.get("risk_reasoning", ""),
+            session_stopped=True,
+            follow_up_mode="onsite_manual_followup",
+        )
+        stop_session_for_risk(session, request.user)
+        response = HttpResponse(status=HTTPStatus.NO_CONTENT)
+        response["HX-Redirect"] = "/risk/popup/"
+        return response
 
     # Auto-generate image if the AI provided an image_prompt.
     # Run in background thread to avoid blocking the response (and gunicorn timeouts).
@@ -349,27 +422,122 @@ def _has_farewell(content: str) -> bool:
     return hits >= 2
 
 
-def _start_image_generation(session, image_prompt: str) -> None:
-    """Generate image in background thread — never blocks the response."""
-    import threading
+@profile_required
+def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
+    """Stream AI teaching response via Server-Sent Events.
 
-    def _run():
+    Returns a StreamingHttpResponse with text/event-stream content type.
+    Frontend consumes SSE events and renders tokens as they arrive.
+    """
+    if request.method != "POST":
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+
+    session = services.get_session_or_404(session_id, request.user)
+
+    if session.status != TeachingSession.Status.ONGOING:
+        return HttpResponse(
+            "data: {\"type\": \"error\", \"message\": \"会话已结束\"}\n\n",
+            content_type="text/event-stream",
+        )
+
+    student_text = request.POST.get("message", "").strip()
+    if not student_text:
+        return HttpResponse(
+            "data: {\"type\": \"error\", \"message\": \"消息不能为空\"}\n\n",
+            content_type="text/event-stream",
+        )
+
+    # ── Risk keyword check ──
+    from risk.services import check_keyword_risk
+    keyword_triggered, _keywords = check_keyword_risk(student_text)
+    if keyword_triggered:
+        return HttpResponse(
+            "data: {\"type\": \"error\", \"message\": \"消息包含敏感内容，请重新表述\"}\n\n",
+            content_type="text/event-stream",
+        )
+
+    # ── Create user message ──
+    ChatMessage.objects.create(
+        session=session,
+        user=request.user,
+        role=ChatMessage.Role.USER,
+        content=student_text,
+    )
+
+    # ── Gather context ──
+    conversation = services.get_conversation_history(session)
+    plan_steps = session.teaching_plan.get("plan_steps", []) if session.teaching_plan else []
+    current_step = 1
+    if plan_steps and conversation:
+        total_msgs = len(conversation)
+        current_step = min(total_msgs // 2 + 1, len(plan_steps))
+
+    step_contexts = session.teaching_plan.get("step_contexts", []) if session.teaching_plan else []
+    prefetched_chunks = None
+    if step_contexts and 1 <= current_step <= len(step_contexts):
+        prefetched_chunks = step_contexts[current_step - 1] or None
+
+    profile = getattr(request.user, "profile", None)
+
+    from knowledge_base.rag.chains import stream_teaching_content
+    from knowledge_base.rag.retriever import get_retriever
+
+    retriever = get_retriever(k=3, user=request.user, session=session, use_case="teaching")
+
+    def _sse_generator():
+        """Generate SSE events from the streaming chain."""
         try:
-            from media_app.services import generate_image
-            img_result = generate_image(image_prompt, n=1, size="1024x1024")
-            if img_result.get("urls"):
-                from .models import ChatMessage
-                latest = (
-                    ChatMessage.objects
-                    .filter(session=session, role=ChatMessage.Role.ASSISTANT)
-                    .order_by("-created_at")
-                    .first()
-                )
-                if latest:
-                    latest.image_url = img_result["urls"][0]
-                    latest.save(update_fields=["image_url"])
-        except Exception:
-            logger.exception("Background image generation failed for session %s", session.session_id)
+            stream = stream_teaching_content(
+                profile=profile,
+                selected_skill=session.selected_skill,
+                teaching_plan_steps=plan_steps,
+                current_step=current_step,
+                conversation_history=conversation,
+                student_message=student_text,
+                retriever=retriever,
+                prefetched_chunks=prefetched_chunks,
+            )
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
+            for event in stream:
+                if event.get("type") == "done":
+                    # Save assistant ChatMessage
+                    tc = event.get("teaching_content", {})
+                    ai_msg = ChatMessage.objects.create(
+                        session=session,
+                        user=request.user,
+                        role=ChatMessage.Role.ASSISTANT,
+                        content=tc.get("content", ""),
+                        image_prompt=tc.get("image_prompt", ""),
+                    )
+                    event["teaching_content"]["message_id"] = ai_msg.message_id
+
+                    # Update RAG context IDs
+                    source_ids = tc.get("source_chunk_ids", [])
+                    if source_ids:
+                        existing_ids = list(session.rag_context_ids or [])
+                        for cid in source_ids:
+                            if cid not in existing_ids:
+                                existing_ids.append(cid)
+                        session.rag_context_ids = existing_ids
+                        session.save(update_fields=["rag_context_ids"])
+
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        except Exception as exc:
+            logger.exception("Streaming failed for session %s", session.session_id)
+            yield f"data: {{\"type\": \"error\", \"message\": \"{str(exc)}\"}}\n\n"
+
+    response = StreamingHttpResponse(
+        _sse_generator(),
+        content_type="text/event-stream",
+    )
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response
+
+
+def _start_image_generation(session, image_prompt: str) -> None:
+    """Dispatch image generation to Celery — never blocks the response."""
+    from media_app.tasks import generate_image_async
+
+    generate_image_async.delay(session.session_id, image_prompt)

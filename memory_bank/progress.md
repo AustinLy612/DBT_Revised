@@ -1781,3 +1781,316 @@ The `.env` file contains live API credentials (MINIMAX_API_KEY, etc.). This file
 - 671 tests passing, system check clean
 - Security flag raised about `.env` credentials
 - Ready for Step 14: Delivery and Handoff
+
+---
+
+## Performance Optimization Sprint — COMPLETED (2026-05-11)
+
+Analysis of production logs (`dbt.log`) revealed each chat message took ~22 seconds: two serial MiniMax LLM calls (risk ~11s + teaching ~11s), plus ~9s cold-start bge-m3 embedding model loading. Four optimizations were applied sequentially, each verified before proceeding.
+
+### Optimization 1: Merge Risk Assessment + Teaching Response LLM Calls
+
+**Problem**: Each student message triggered 2 serial MiniMax M2.7 calls — one for AI risk assessment (`run_risk_assessment()`) and one for teaching response (`generate_teaching_content()`). Each call took ~11 seconds. For 99% of messages (no keyword triggers), the risk assessment was redundant.
+
+**Solution**: Modified the flow in `teaching/views.py::send_message_view`:
+- Fast keyword check still runs first (near-zero cost)
+- If keywords trigger → separate AI risk call (safety-critical path, preserves dual-channel)
+- If keywords don't trigger → risk assessment fields (`risk_level`, `should_stop_session`, `risk_reasoning`) are populated **inline** by the teaching LLM call, saving one API round-trip
+
+**Files modified**:
+- `knowledge_base/rag/schemas.py` — Added 3 risk fields to `TeachingContent` Pydantic model
+- `knowledge_base/rag/prompts.py` — Added `_RISK_ASSESSMENT_INLINE` hint appended to system prompt when `include_risk_assessment=True`
+- `knowledge_base/rag/chains.py` — `generate_teaching_content()` accepts `include_risk_assessment` parameter
+- `teaching/services.py` — `generate_teaching_response()` passes through `include_risk_assessment`
+- `teaching/views.py` — Core flow rewrite: conditional risk call + merged response handling
+
+**Result**: Normal messages: 1 LLM call instead of 2 (~50% reduction, ~11s saved per message). Safety-critical path (keyword-triggered messages) unchanged.
+
+### Optimization 2: Switch Default Image Model to `image-01-live`
+
+**Problem**: Default image model was `image-01` (standard latency). MiniMax provides `image-01-live` which is optimized for real-time interactive scenarios.
+
+**Solution**: Changed `DEFAULT_IMAGE_MODEL` in `media_app/services.py` from `"image-01"` to `"image-01-live"`.
+
+**Files modified**: `media_app/services.py` (1 line)
+
+### Optimization 3: Preload bge-m3 Embedding Model at Django Startup
+
+**Problem**: First semantic search request triggered ~9s cold-start loading of `BAAI/bge-m3` (2.12GB) from disk cache, plus network checks to hf-mirror.com. This affected skill selection and all RAG-dependent operations.
+
+**Solution**: Added `preload_embedding_model()` in `knowledge_base/services.py` that loads the model in a background daemon thread at Django startup via `AppConfig.ready()`. Guarded by `_embedding_preload_started` flag to prevent double-loading. Skips Django auto-reloader child process via `RUN_MAIN` env check.
+
+**Files modified**:
+- `knowledge_base/services.py` — Added `preload_embedding_model()` + `_embedding_preload_started` flag
+- `knowledge_base/apps.py` — Added `ready()` method with background thread spawning
+
+**Result**: Model is warm by the time a user navigates to the teaching page. Cold-start delay eliminated from the critical path.
+
+### Optimization 4: Use MongoDB `$text` Instead of `$regex` for Keyword Search
+
+**Problem**: `keyword_search()` used MongoDB `$regex` with PCRE lookaheads for multi-term queries. The text index (`chunk_text_text`) was being created but never used for querying — `$regex` can't leverage text indexes and requires collection scans.
+
+**Solution**: Replaced `$regex` with MongoDB's `$text` operator which uses the native text index. Added `$regex` fallback for edge cases where `$text` returns no results (e.g., single CJK characters that don't form complete bigram tokens). Results sorted by MongoDB's built-in `textScore` (TF-IDF-based) instead of custom term-matching ratio. Extracted `_keyword_search_regex()` as a standalone fallback function.
+
+**Files modified**: `knowledge_base/services.py` — `keyword_search()` rewritten, `_keyword_search_regex()` added
+
+**Result**: Keyword search now uses indexed lookup instead of collection scan. For large knowledge bases, this is the difference between O(log n) and O(n).
+
+### Architecture impacts summary
+
+| # | Change | LLM calls/msg | Cold start | Keyword search |
+|---|--------|---------------|------------|----------------|
+| Before | — | 2 (risk + teaching) | ~9s | $regex (collection scan) |
+| Opt 1 | Merged risk+teaching | 1 (normal), 2 (risk) | — | — |
+| Opt 2 | image-01-live | — | — | — |
+| Opt 3 | Preload bge-m3 | — | ~0s (warm) | — |
+| Opt 4 | $text index | — | — | $text (indexed) |
+
+---
+
+## Performance Optimization Sprint 2 — COMPLETED (2026-05-11)
+
+Four additional optimizations applied sequentially. Each was verified (compilation + import + Django template loading) before proceeding.
+
+### Optimization 5: Background Image Generation → Celery
+
+**Problem**: `_start_image_generation()` in `teaching/views.py` used `threading.Thread(daemon=True)` for image generation. Daemon threads are lost on gunicorn worker restart, and under high concurrency they compete for the same worker process's CPU/memory.
+
+**Solution**: Created `media_app/tasks.py` with `generate_image_async` Celery task (`@shared_task`, max_retries=2). The task generates the image via MiniMax and attaches the URL to the latest assistant ChatMessage. `_start_image_generation()` now calls `generate_image_async.delay()` — fire-and-forget via Redis broker.
+
+**Files modified/created**:
+- `media_app/tasks.py` — new file, Celery task
+- `teaching/views.py` — `_start_image_generation()` simplified from 18 lines to 3
+
+**Result**: Image generation offloaded from gunicorn workers to Celery workers. Survives worker restarts (task is re-queued). Worker processes stay responsive during image API calls.
+
+### Optimization 7: Redis Caching for RAG Results
+
+**Problem**: Every teaching message triggered a fresh `hybrid_search()` (MongoDB `$text` + Qdrant semantic search) even when the same skill was queried repeatedly within a teaching session. Redis was running but unused for caching.
+
+**Solution**: Added Redis cache layer around `hybrid_search()`:
+- `get_redis_client()` — lazy Redis connection singleton with 2s timeout, graceful degradation if unavailable
+- `_rag_cache_key(query, top_k)` — SHA256-based deterministic keys (`rag:search:<digest>`)
+- `_rag_cache_get()` / `_rag_cache_set()` — cache-aside pattern with 5-minute TTL
+- `hybrid_search()` checks cache first; on miss, runs search and caches the merged result
+
+**Files modified**: `knowledge_base/services.py` — added imports (hashlib, json, redis), `RAG_CACHE_TTL_SECONDS = 300`, 4 new helper functions, cache-aside in `hybrid_search()`
+
+**Result**: Same-skill repeat queries within a teaching session hit Redis cache (sub-ms) instead of querying MongoDB + Qdrant. Cache is shared across all gunicorn workers.
+
+### Optimization 8: Teaching Plan Step Context Pre-fetch
+
+**Problem**: Each teaching message in `generate_teaching_response()` called `get_retriever(k=3)` to fetch RAG context, even though the plan steps and their content were known ahead of time. As the conversation progresses through multiple steps, the per-message retrievals accumulate latency.
+
+**Solution**: 
+- `run_teaching_plan()` now pre-fetches RAG chunks for each plan step after generating the plan, storing them in `session.teaching_plan["step_contexts"]` (list of lists parallel to `plan_steps`)
+- `generate_teaching_response()` extracts the current step's pre-fetched context and passes it to `generate_teaching_content()` as `prefetched_chunks`
+- `generate_teaching_content()` (in `chains.py`) merges pre-fetched chunks into the retrieval results, deduplicating by `chunk_id`
+
+**Files modified**:
+- `knowledge_base/rag/chains.py` — added `prefetched_chunks` parameter to `generate_teaching_content()`
+- `teaching/services.py` — `run_teaching_plan()` pre-fetches step contexts; `generate_teaching_response()` passes them to the chain
+
+**Result**: Pre-fetched context provides broader RAG coverage per step without additional search round-trips. Combined with Optimization 7's Redis cache, pre-fetch results are cached for subsequent messages in the same step.
+
+### Optimization 10: Frontend Perceived Performance
+
+**Problem**: Users saw a blank chat area during LLM response generation (~11s typ.). The "正在思考..." text indicator was minimal. No FOUC protection for Alpine.js components.
+
+**Solution**:
+- `base.html`: Added CSS for `[x-cloak]` (FOUC prevention), skeleton shimmer animation (`@keyframes shimmer`), and smooth HTMX indicator opacity transitions
+- `session.html`: Replaced plain-text "正在思考..." with animated skeleton shimmer bars (`.skeleton` class with `shimmer` animation) that mimic a loading message bubble
+- Images already had `loading="lazy"` on `<img>` tags (existing, verified)
+
+**Files modified**:
+- `templates/base.html` — added `<style>` block with x-cloak, shimmer animation, indicator transitions
+- `templates/teaching/session.html` — skeleton shimmer replacing plain-text sending indicator
+
+**Result**: FOUC eliminated via `[x-cloak]`. AI response loading shows animated skeleton placeholder instead of static text. HTMX indicator has smooth fade-in/fade-out. Images lazy-load to avoid blocking initial page render.
+
+### Sprint 2 Architecture Impacts Summary
+
+| # | Area | Before | After |
+|---|------|--------|-------|
+| **5** | Image gen dispatch | `threading.Thread` (gunicorn worker) | Celery task (Redis broker) |
+| **7** | RAG search cache | No cache (always MongoDB + Qdrant) | Redis cache, 5min TTL |
+| **8** | Step context | Per-message retrieval only | Pre-fetched + dynamic merge |
+| **10** | Loading UX | Static text "正在思考..." | Skeleton shimmer animation |
+
+---
+
+## Optimization 6: Streaming LLM Responses (SSE) — COMPLETED (2026-05-11)
+
+**Problem**: Even with merged risk+teaching (Optimization 1), each LLM call took 5-14 seconds. Users stared at a blank chat area with no feedback until the full response arrived. This is the single biggest perceived-latency issue.
+
+**Solution**: Stream the LLM response via Server-Sent Events (SSE), delivering tokens as they're generated. The MiniMax API supports `stream=True` which returns SSE with `data: {"choices":[{"delta":{"content":"你"}}]}` events.
+
+**Implementation**:
+
+| Layer | File | Change |
+|-------|------|--------|
+| LLM Client | `knowledge_base/rag/llm_client.py` | Added `minimax_chat_completion_stream()` — generator yielding content deltas via `stream=True`, then `[STREAM_DONE]` sentinel, then full accumulated text |
+| Prompt | `knowledge_base/rag/prompts.py` | Added `_STREAMING_TEACHING_SYSTEM` + `build_streaming_teaching_messages()` — outputs natural Chinese with `<!--META:{json}-->` comment at end instead of pure JSON |
+| Chain | `knowledge_base/rag/chains.py` | Added `stream_teaching_content()` — generator yielding `{"type":"content","text":"..."}` SSE events, and `_parse_streaming_content()` extracting metadata from HTML comment |
+| View | `teaching/views.py` | Added `stream_message_view` — returns `StreamingHttpResponse(text/event-stream)`, creates ChatMessage (user + assistant) in-stream, handles risk keyword pre-filter |
+| URL | `teaching/urls.py` | Added `/session/<id>/stream/` route |
+| Nginx | `docker/nginx.conf` | Added `/teaching/session/` location with `proxy_buffering off`, `gzip off`, `proxy_read_timeout 120s` |
+| Frontend JS | `static/js/media.js` | Added `DBT_Stream.send()` — fetch-based SSE consumer creating dynamic message bubble, incremental text rendering, META comment filtering, TTS button injection |
+| Frontend HTML | `templates/teaching/session.html` | Form changed from `hx-post` to `onsubmit="DBT_Stream.send()"`, skeleton indicator updated |
+
+**Streaming flow**:
+```
+User submits form → DBT_Stream.send()
+  → User bubble added to chat
+  → Skeleton appears
+  → Empty AI bubble created with blinking cursor
+  → fetch POST /teaching/session/<id>/stream/
+  → Django view: keyword check → create user msg → RAG retrieval → SSE generator
+  → MiniMax stream=True → tokens arrive
+  → Each token: SSE data: {"type":"content","text":"..."}
+  → Frontend appends token to bubble, strips <!--META:...--> comment
+  → Final event: {"type":"done","teaching_content":{...}}
+  → ChatMessage saved, image generated if needed
+  → TTS button added to bubble
+```
+
+**Result**: Users see the first tokens within ~2 seconds (TTFB of streaming) instead of waiting 5-14 seconds for the full response. The `<!--META:...-->` HTML comment is invisible in the browser. Nginx `proxy_buffering off` ensures events are forwarded immediately.
+
+### Deployment (2026-05-11 23:49)
+
+All 10 optimizations deployed via `docker compose restart web`. Verification:
+- Container restarted, gunicorn workers forked fresh (confirmed by bge-m3 preload logs)
+- HTTP 200 on main page
+- Streaming URL route `/teaching/session/<id>/stream/` resolves (302 → login, proving `@profile_required` is active)
+- Fresh gunicorn workers now running all accumulated changes:
+  - Opt 1-2: MiniMax native API + image model `image-01-live`
+  - Opt 3-4: MongoDB `$text` index + `$regex` fallback
+  - Opt 5,7,8,10: Celery image gen, Redis RAG cache, plan-step pre-fetch, skeleton shimmer
+  - Opt 6: SSE streaming with `proxy_buffering off` (the highest-impact UX improvement)
+
+### Post-Deployment Bug Fixes (2026-05-12)
+
+Three bugs discovered after deploying streaming to production:
+
+**Bug 1: Static JS not updated → form fell back to GET**
+- Symptom: Sending a message resulted in a page refresh with `?csrfmiddlewaretoken=...&message=hi` GET params, no AI response
+- Root cause: `docker compose restart web` restarted gunicorn but the static JS volume (`./staticfiles` mounted to nginx) still had `media.js` from May 9 — missing the `DBT_Stream` object entirely. The form's `onsubmit="DBT_Stream.send(...)"` threw ReferenceError → browser fell back to default form GET submission
+- Additional issue: Nginx container had stale `default.conf` (57 lines, no SSE `proxy_buffering off` block) — bind mount didn't propagate the updated host file until nginx was restarted
+- Fix: `collectstatic --noinput` + `docker compose restart nginx` + cache-buster version bump to `v=20260512`
+- Lesson: `docker compose restart web` is insufficient after static file changes. Need `collectstatic` (for shared volume) + `restart nginx` (for bind-mount edge cases)
+
+**Bug 2: Second AI response appeared in the first bubble**
+- Symptom: Multi-turn conversation showed all AI responses in the first message bubble; TTS also played wrong text
+- Root cause: `DBT_Stream._readStream()` used `document.getElementById("streaming-text")` to find the text span. When the first stream completed, only `aiBubble.id` was cleared — the child `<span id="streaming-text">` and `<span id="streaming-cursor">` IDs were left in the DOM. The second message's `_readStream` called `getElementById` which returned the *first* (old) element with that ID
+- Fix (3 changes in `media.js`):
+  1. `document.getElementById("streaming-text")` → `aiBubble.querySelector("#streaming-text")` — scopes lookup to the current bubble
+  2. `document.getElementById("streaming-cursor")` → `aiBubble.querySelector("#streaming-cursor")`
+  3. Clean up child element IDs (`streamText.id = ""`, `cursor.id = ""`) in all completion/error paths
+- Also applied `querySelector` scoping to the `.catch()` in `send()` for consistency
+
+**Bug 3: Streaming response formatting — markdown rendered as raw text**
+- Symptom: `**bold**`, `> quotes`, `---` separators shown raw; `\n` newlines collapsed (all text in one continuous blob)
+- Root cause: Content rendered via `textContent` on a `<span>`, which (a) doesn't render `\n` as line breaks, and (b) shows all characters literally including markdown syntax. The streaming prompt (`_STREAMING_TEACHING_SYSTEM`) had no formatting restrictions, so the LLM freely used markdown
+- Fix (2-part):
+  1. **Prompt** (`prompts.py`): Added explicit formatting rules to `_STREAMING_TEACHING_SYSTEM` — forbid all markdown symbols (`**`, `>`, `---`, `#`, `*`, `` ` ``), use natural Chinese paragraph breaks (blank lines), use Chinese expressions for emphasis instead of bold markers
+  2. **Frontend** (`media.js`): Added `_escapeHtml()` helper; changed content rendering from `textContent +=` to `innerHTML = escapeHtml(text).replace(/\n/g, "<br>")`; TTS playback uses raw `accumulatedText` (without HTML) for correct speech synthesis
+
+### Specific Skill Recommendation Enhancement (2026-05-12)
+
+**Motivation**: The teaching system was recommending broad DBT modules (e.g. "正念", "情绪调节") as the teaching target, giving students an unfocused learning experience. The goal was to recommend a **specific skill** within a module (e.g. "观察呼吸" within "正念") based on user profile and history, while keeping teaching session duration and depth unchanged.
+
+**Changes made** (4 files):
+
+1. **`knowledge_base/rag/schemas.py`** — `SkillSelectionResult`:
+   - Added `selected_module` field (required): the DBT module the skill belongs to
+   - `selected_skill` now expects specific skills (e.g. "观察呼吸"), not broad module names
+   - Updated field descriptions to clarify the module→skill hierarchy
+
+2. **`knowledge_base/rag/prompts.py`** — Skill selection prompts:
+   - `_SKILL_SELECTION_SYSTEM`: Added full DBT skill hierarchy (module → specific skills), explicit recommendation rules prioritizing specific skills, and updated JSON example with `selected_module`
+   - `build_skill_selection_messages`: Updated default module list to include specific skill examples per module, updated user prompt to ask for a specific skill within a module
+
+3. **`teaching/services.py`** — Service layer:
+   - `_run_skill_selection_inner`: Now saves `session.selected_module` from `result.selected_module`
+   - `run_info_collection`: Added `selected_module` to `update_fields` in phase save
+   - Improved default RAG retrieval query to include all four DBT modules for better search coverage
+
+4. **`teaching/tests.py`** — Updated test mocks and assertions:
+   - `MOCK_SKILL_SELECTION`: Added `"selected_module": "正念"`
+   - Three test methods now assert `selected_module == "正念"` alongside existing `selected_skill` assertions
+
+**Also fixed**:
+- `dbt_platform/settings.py`: Added pymongo/httpcore loggers at WARNING level (was flooding DEBUG logs during tests)
+- `knowledge_base/apps.py`: Added test-mode detection to skip embedding model preload during test runs
+
+
+## Personal Inquiry Flow Enhancement (2026-05-12)
+
+**Motivation**: The skill recommendation flow was based solely on training records, questionnaire data, and pre-mood. The AI would recommend a skill first, then during teaching might ask about recent experiences. The user wanted to reverse this: **first ask about personal experiences**, then use that personal context alongside training records and questionnaire data to recommend the most appropriate skill.
+
+**New flow**: `pre_mood_recording → personal_inquiry → info_collection → skill_selection → ...`
+
+Previously: `pre_mood_recording → info_collection → skill_selection → ...` (skill recommended based only on profile + history + tests)
+
+### Changes made (8 files):
+
+1. **`teaching/models.py`** — Session model:
+   - Added `PERSONAL_INQUIRY = "personal_inquiry", "个人情况了解"` phase
+   - Added `personal_context = TextField(blank=True, default="")` to store student's shared experiences
+
+2. **`knowledge_base/rag/schemas.py`** — New schema:
+   - Added `PersonalInquiryResult` with `greeting`, `question`, `inquiry_focus` fields — the structured output for generating warm, empathetic questions
+
+3. **`knowledge_base/rag/prompts.py`** — Prompt templates:
+   - Added `_PERSONAL_INQUIRY_SYSTEM` — system prompt for generating warm, age-appropriate questions based on profile + mood
+   - Added `build_personal_inquiry_messages()` — message builder accepting profile, mood_value, mood_note
+   - Modified `_SKILL_SELECTION_SYSTEM` — recommendation rules now prioritize personal context over historical data
+   - Modified `build_skill_selection_messages()` — accepts `personal_context` and `mood_value` parameters, includes them in the user prompt as the most important recommendation input
+
+4. **`knowledge_base/rag/chains.py`** — RAG chain functions:
+   - Added `generate_personal_inquiry()` chain — calls LLM to generate personalized inquiry question
+   - Modified `generate_skill_selection()` — accepts and forwards `personal_context` and `mood_value` to the prompt builder
+
+5. **`teaching/services.py`** — Service orchestration:
+   - `run_pre_mood()` now advances to `PERSONAL_INQUIRY` (was `INFO_COLLECTION`)
+   - Added `generate_inquiry_question()` — generates warm question using profile + pre-mood
+   - Added `run_personal_inquiry()` — stores personal_context, then runs info_collection + skill selection
+   - `_run_skill_selection_inner()` now reads `session.personal_context` and pre-mood value, passes them to skill selection
+
+6. **`teaching/views.py`** — View layer:
+   - `record_pre_mood_view()` — no longer auto-runs skill selection; just redirects to personal_inquiry phase
+   - Added `personal_inquiry_view()` — POST stores personal context → runs skill selection; on API error, reverts to info_collection for retry with personal_context preserved
+   - `session_view()` — generates inquiry question (with fallback) for personal_inquiry phase rendering
+
+7. **`teaching/urls.py`** — Added `personal_inquiry/` route
+
+8. **`templates/teaching/session.html`** — Added personal_inquiry phase UI with:
+   - AI-generated warm greeting and open-ended question (purple-themed)
+   - Textarea for student to share recent experiences
+   - Privacy reassurance text
+
+### Key design decisions:
+- Personal context is stored BEFORE skill selection, so if the API call fails, the student's input is preserved for retry
+- Inquiry question generation has a fallback hardcoded greeting+question if the LLM call fails
+- The skill selection prompt now treats personal context as the most important input, above historical data
+- Mood data (previously unused in skill selection) is now passed alongside personal context
+
+### Error recovery:
+- If skill selection fails during personal_inquiry, phase reverts to `INFO_COLLECTION`
+- The `record_pre_mood_view` already handles INFO_COLLECTION phase as a retry path
+- Personal context is preserved in the session, so retry uses the same student input
+
+### Files modified:
+| File | Action |
+|------|--------|
+| `teaching/models.py` | Added PERSONAL_INQUIRY phase + personal_context field |
+| `knowledge_base/rag/schemas.py` | Added PersonalInquiryResult schema |
+| `knowledge_base/rag/prompts.py` | Added personal inquiry prompts; modified skill selection prompts |
+| `knowledge_base/rag/chains.py` | Added generate_personal_inquiry; modified generate_skill_selection |
+| `teaching/services.py` | Added inquiry functions; modified run_pre_mood and skill selection |
+| `teaching/views.py` | Added personal_inquiry_view; modified record_pre_mood_view and session_view |
+| `teaching/urls.py` | Added personal_inquiry route |
+| `templates/teaching/session.html` | Added personal_inquiry phase template |
+| `teaching/tests.py` | Updated all tests for new flow; added personal_inquiry tests |
+
+**Verification**: All 19 directly affected tests pass (SessionCreationTests, SkillConfirmationTests, DataPersistenceTests).

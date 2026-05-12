@@ -206,6 +206,11 @@ LOGGING = {
             "formatter": "verbose",
         },
     },
+    "loggers": {
+        "pymongo": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "httpcore": {"handlers": ["console"], "level": "WARNING", "propagate": False},
+        "sentence_transformers": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
     "root": {
         "handlers": ["console", "file"],
         "level": "INFO" if not DEBUG else "DEBUG",

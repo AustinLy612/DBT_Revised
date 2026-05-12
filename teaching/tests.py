@@ -27,7 +27,14 @@ User = get_user_model()
 
 # ── Mock chain output values ──
 
+MOCK_PERSONAL_INQUIRY = {
+    "greeting": "谢谢你分享你此刻的心情。学习压力大的时候确实会让人感到疲惫。",
+    "question": "最近一周学校里或者家里有什么事情让你觉得特别有压力，或者让你感到开心吗？",
+    "inquiry_focus": "近期学业和情绪状态",
+}
+
 MOCK_SKILL_SELECTION = {
+    "selected_module": "正念",
     "selected_skill": "观察呼吸",
     "reason": "适合初学者，有助于情绪管理",
     "skill_difficulty": "初级",
@@ -141,8 +148,8 @@ class ViewTestMixin:
         if cls._patches:
             return  # already started
         from knowledge_base.rag.schemas import (
-            SkillSelectionResult, TeachingPlan, TeachingContent,
-            TeachingSummary, RiskAssessment,
+            PersonalInquiryResult, SkillSelectionResult, TeachingPlan,
+            TeachingContent, TeachingSummary, RiskAssessment,
         )
 
         # Mock retriever — returns empty chunks (no Qdrant needed)
@@ -153,6 +160,8 @@ class ViewTestMixin:
         cls._patches = [
             patch("knowledge_base.rag.retriever.get_retriever",
                   return_value=mock_ret),
+            patch("knowledge_base.rag.chains.generate_personal_inquiry",
+                  return_value=PersonalInquiryResult(**MOCK_PERSONAL_INQUIRY)),
             patch("knowledge_base.rag.chains.generate_skill_selection",
                   return_value=SkillSelectionResult(**MOCK_SKILL_SELECTION)),
             patch("knowledge_base.rag.chains.generate_teaching_plan",
@@ -215,8 +224,8 @@ class SessionCreationTests(TestCase):
         self.assertEqual(session.phase, TeachingSession.Phase.PRE_MOOD_RECORDING)
         self.assertEqual(session.status, TeachingSession.Status.ONGOING)
 
-    def test_pre_mood_triggers_skill_selection(self):
-        """After pre-mood recording, info_collection + skill_selection produce results."""
+    def test_pre_mood_advances_to_personal_inquiry(self):
+        """After pre-mood recording, phase advances to personal_inquiry (not skill_selection)."""
         self.client.post(reverse("teaching:start"))
         session = TeachingSession.objects.first()
         self.client.post(
@@ -224,10 +233,33 @@ class SessionCreationTests(TestCase):
             {"mood_value": 3},
         )
         session.refresh_from_db()
+        self.assertEqual(session.phase, TeachingSession.Phase.PERSONAL_INQUIRY)
+        self.assertTrue(session.pre_mood_id)
+
+    def test_personal_inquiry_triggers_skill_selection(self):
+        """After submitting personal context, skill selection runs."""
+        self.client.post(reverse("teaching:start"))
+        session = TeachingSession.objects.first()
+        # Record pre-mood → personal_inquiry
+        self.client.post(
+            reverse("teaching:record_pre_mood", args=[session.session_id]),
+            {"mood_value": 3},
+        )
+        session.refresh_from_db()
+        self.assertEqual(session.phase, TeachingSession.Phase.PERSONAL_INQUIRY)
+
+        # Submit personal context → skill_selection
+        self.client.post(
+            reverse("teaching:personal_inquiry", args=[session.session_id]),
+            {"personal_context": "最近考试压力很大，经常感到焦虑。"},
+        )
+        session.refresh_from_db()
         self.assertEqual(session.phase, TeachingSession.Phase.SKILL_SELECTION)
+        self.assertEqual(session.selected_module, "正念")
         self.assertEqual(session.selected_skill, "观察呼吸")
         self.assertEqual(session.selection_reason, "适合初学者，有助于情绪管理")
         self.assertIn("chunk_001", session.rag_context_ids)
+        self.assertEqual(session.personal_context, "最近考试压力很大，经常感到焦虑。")
 
     def test_start_requires_profile_completed(self):
         user2 = User.objects.create_user(username="noprofile", password="testpass123", role="student")
@@ -240,18 +272,67 @@ class SessionCreationTests(TestCase):
         response = self.client.post(reverse("teaching:start"))
         self.assertEqual(response.status_code, 302)
 
-    def test_pre_mood_fails_gracefully_on_api_error(self):
+    def test_personal_inquiry_fails_gracefully_on_api_error(self):
         self.client.post(reverse("teaching:start"))
         session = TeachingSession.objects.first()
+        # Record pre-mood → personal_inquiry
+        self.client.post(
+            reverse("teaching:record_pre_mood", args=[session.session_id]),
+            {"mood_value": 3},
+        )
+        session.refresh_from_db()
+        self.assertEqual(session.phase, TeachingSession.Phase.PERSONAL_INQUIRY)
+
+        # Submit personal context → API error during skill selection
         with patch("knowledge_base.rag.chains.generate_skill_selection",
                    side_effect=APIError("API error")):
             response = self.client.post(
-                reverse("teaching:record_pre_mood", args=[session.session_id]),
-                {"mood_value": 3},
+                reverse("teaching:personal_inquiry", args=[session.session_id]),
+                {"personal_context": "最近压力很大。"},
             )
-        self.assertRedirects(response, reverse("teaching:home"))
+        self.assertRedirects(response, reverse("teaching:session", args=[session.session_id]))
         session.refresh_from_db()
-        self.assertEqual(session.status, TeachingSession.Status.USER_TERMINATED)
+        # On error, phase reverts to info_collection for retry
+        self.assertEqual(session.phase, TeachingSession.Phase.INFO_COLLECTION)
+
+    def test_personal_inquiry_requires_post(self):
+        self.client.post(reverse("teaching:start"))
+        session = TeachingSession.objects.first()
+        self.client.post(
+            reverse("teaching:record_pre_mood", args=[session.session_id]),
+            {"mood_value": 3},
+        )
+        session.refresh_from_db()
+        response = self.client.get(
+            reverse("teaching:personal_inquiry", args=[session.session_id]),
+        )
+        self.assertRedirects(response, reverse("teaching:session", args=[session.session_id]))
+
+    def test_personal_inquiry_empty_context_rejected(self):
+        self.client.post(reverse("teaching:start"))
+        session = TeachingSession.objects.first()
+        self.client.post(
+            reverse("teaching:record_pre_mood", args=[session.session_id]),
+            {"mood_value": 3},
+        )
+        session.refresh_from_db()
+        response = self.client.post(
+            reverse("teaching:personal_inquiry", args=[session.session_id]),
+            {"personal_context": "   "},
+        )
+        self.assertRedirects(response, reverse("teaching:session", args=[session.session_id]))
+        # Phase should still be personal_inquiry
+        session.refresh_from_db()
+        self.assertEqual(session.phase, TeachingSession.Phase.PERSONAL_INQUIRY)
+
+    def test_personal_inquiry_wrong_phase_rejected(self):
+        self.client.post(reverse("teaching:start"))
+        session = TeachingSession.objects.first()
+        response = self.client.post(
+            reverse("teaching:personal_inquiry", args=[session.session_id]),
+            {"personal_context": "hello"},
+        )
+        self.assertRedirects(response, reverse("teaching:session", args=[session.session_id]))
 
 
 class SkillConfirmationTests(TestCase):
@@ -562,6 +643,15 @@ class SessionPageTests(TestCase):
         response = self.client.get(reverse("teaching:session", args=[self.session.session_id]))
         self.assertEqual(response.status_code, 404)
 
+    def test_personal_inquiry_phase_shows_inquiry(self):
+        self.session.phase = TeachingSession.Phase.PERSONAL_INQUIRY
+        self.session.pre_mood_id = "test-mood-id"
+        self.session.save()
+        response = self.client.get(reverse("teaching:session", args=[self.session.session_id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "在开始之前，先聊聊你最近的情况")
+        self.assertContains(response, "分享你最近的经历")
+
     def test_unauthenticated_redirected(self):
         self.client.logout()
         response = self.client.get(reverse("teaching:session", args=[self.session.session_id]))
@@ -709,23 +799,28 @@ class DataPersistenceTests(TestCase):
         self.client.post(reverse("teaching:start"))
         session = TeachingSession.objects.first()
 
-        # 2. Record pre-mood → triggers info_collection + skill_selection
+        # 2. Record pre-mood → personal_inquiry
         self.client.post(reverse("teaching:record_pre_mood", args=[session.session_id]),
                          {"mood_value": 3})
         session.refresh_from_db()
 
-        # 3. Confirm skill → generates teaching plan
+        # 3. Submit personal context → skill_selection
+        self.client.post(reverse("teaching:personal_inquiry", args=[session.session_id]),
+                         {"personal_context": "最近考试压力很大。"})
+        session.refresh_from_db()
+
+        # 4. Confirm skill → generates teaching plan
         self.client.post(reverse("teaching:confirm_skill", args=[session.session_id]))
         session.refresh_from_db()
 
-        # 4. Send messages
+        # 5. Send messages
         for msg in ["什么是正念？", "怎么练习？", "我试了一下，感觉不错"]:
             self.client.post(
                 reverse("teaching:send_message", args=[session.session_id]),
                 {"message": msg},
             )
 
-        # 4. End session
+        # 6. End session
         self.client.post(reverse("teaching:end_session", args=[session.session_id]))
         session.refresh_from_db()
 
@@ -736,6 +831,7 @@ class DataPersistenceTests(TestCase):
         self.assertTrue(session.selection_reason)
         self.assertTrue(session.teaching_plan)
         self.assertTrue(session.rag_context_ids)
+        self.assertTrue(session.personal_context)
 
         # Messages
         user_msgs = ChatMessage.objects.filter(session=session, role=ChatMessage.Role.USER).count()
@@ -748,7 +844,10 @@ class DataPersistenceTests(TestCase):
         session = TeachingSession.objects.first()
         self.client.post(reverse("teaching:record_pre_mood", args=[session.session_id]),
                          {"mood_value": 3})
+        self.client.post(reverse("teaching:personal_inquiry", args=[session.session_id]),
+                         {"personal_context": "最近压力大。"})
         session.refresh_from_db()
+        self.assertEqual(session.selected_module, "正念")
         self.assertEqual(session.selected_skill, "观察呼吸")
 
     def test_teaching_plan_persisted(self):
@@ -756,6 +855,8 @@ class DataPersistenceTests(TestCase):
         session = TeachingSession.objects.first()
         self.client.post(reverse("teaching:record_pre_mood", args=[session.session_id]),
                          {"mood_value": 3})
+        self.client.post(reverse("teaching:personal_inquiry", args=[session.session_id]),
+                         {"personal_context": "最近压力大。"})
         self.client.post(reverse("teaching:confirm_skill", args=[session.session_id]))
         session.refresh_from_db()
         self.assertTrue(session.teaching_plan)
@@ -766,6 +867,8 @@ class DataPersistenceTests(TestCase):
         session = TeachingSession.objects.first()
         self.client.post(reverse("teaching:record_pre_mood", args=[session.session_id]),
                          {"mood_value": 3})
+        self.client.post(reverse("teaching:personal_inquiry", args=[session.session_id]),
+                         {"personal_context": "最近压力大。"})
         self.client.post(reverse("teaching:confirm_skill", args=[session.session_id]))
         self.client.post(
             reverse("teaching:send_message", args=[session.session_id]),
@@ -783,6 +886,8 @@ class DataPersistenceTests(TestCase):
         session = TeachingSession.objects.first()
         self.client.post(reverse("teaching:record_pre_mood", args=[session.session_id]),
                          {"mood_value": 3})
+        self.client.post(reverse("teaching:personal_inquiry", args=[session.session_id]),
+                         {"personal_context": "最近压力大。"})
         session.refresh_from_db()
         initial_ids = list(session.rag_context_ids)
 
@@ -838,7 +943,7 @@ class StateTransitionTests(TestCase):
         self.assertEqual(session.phase, TeachingSession.Phase.PRE_MOOD_RECORDING)
         self.assertEqual(session.status, TeachingSession.Status.ONGOING)
 
-    def test_pre_mood_to_info_collection_transition(self):
+    def test_pre_mood_to_personal_inquiry_transition(self):
         from .services import run_pre_mood
         session = TeachingSession.objects.create(
             user=self.user,
@@ -846,8 +951,27 @@ class StateTransitionTests(TestCase):
         )
         run_pre_mood(session, self.user, mood_value=4, emoji="🙂")
         session.refresh_from_db()
-        self.assertEqual(session.phase, TeachingSession.Phase.INFO_COLLECTION)
+        self.assertEqual(session.phase, TeachingSession.Phase.PERSONAL_INQUIRY)
         self.assertTrue(session.pre_mood_id)
+
+    def test_personal_inquiry_to_skill_selection_transition(self):
+        from .services import run_personal_inquiry
+        from knowledge_base.rag.schemas import SkillSelectionResult as Ssr
+        session = TeachingSession.objects.create(
+            user=self.user,
+            phase=TeachingSession.Phase.PERSONAL_INQUIRY,
+            pre_mood_id="test-mood-id",
+        )
+        with patch("knowledge_base.rag.chains.generate_skill_selection",
+                   return_value=Ssr(**MOCK_SKILL_SELECTION)):
+            mock_ret = MagicMock()
+            mock_ret.search_with_context.return_value = []
+            with patch("knowledge_base.rag.retriever.get_retriever", return_value=mock_ret):
+                run_personal_inquiry(session, self.user, "最近考试压力很大。")
+        session.refresh_from_db()
+        self.assertEqual(session.phase, TeachingSession.Phase.SKILL_SELECTION)
+        self.assertEqual(session.personal_context, "最近考试压力很大。")
+        self.assertEqual(session.selected_skill, "观察呼吸")
 
     def test_skill_to_teaching_transition(self):
         from .services import run_teaching_plan
@@ -924,6 +1048,7 @@ class StateTransitionTests(TestCase):
                 run_skill_selection(session, self.user)
 
         session.refresh_from_db()
+        self.assertEqual(session.selected_module, "正念")
         self.assertEqual(session.selected_skill, "观察呼吸")
         self.assertIn("chunk_001", session.rag_context_ids)
 

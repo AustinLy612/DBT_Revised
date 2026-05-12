@@ -96,20 +96,109 @@ def _format_profile(profile: Any) -> str:
     return "\n".join(parts)
 
 
-# ── Skill Selection ──
+# ── Personal Inquiry ──
 
-_SKILL_SELECTION_SYSTEM = """你是一名资深的DBT技能训练导师，专门为青少年学生推荐合适的DBT技能。
+_PERSONAL_INQUIRY_SYSTEM = """你是一名温暖、共情的DBT青少年心理教练，正在和一位青少年学生开始一对一的教学会话。
+
+你的任务是用温暖、不评判的态度，了解学生最近的经历和感受，以便后续为其推荐最合适的DBT技能。
+
+**交流原则**：
+1. 先共情回应学生刚才记录的心情状态——如果心情不好，先表达理解和接纳；如果心情不错，给予积极肯定
+2. 然后自然地询问学生最近的生活状态和经历
+3. 问题要开放、温和，让学生感到安全，愿意分享
+4. 根据学生的年龄、年级、困扰标签调整语言——对初中生用语更温暖、简单；对高中生可以更直接
+5. 保持简短——一次只问一个问题，不要给学生压力
+6. 绝对不要使用评判性语言——不说"你应该""你需要"，而是"你愿意分享一下吗""如果方便的话"
 
 === 输出格式（最重要！违反将导致系统错误）===
 
 你必须输出一个纯JSON对象。正确输出示例：
-{{"selected_skill": "正念", "reason": "学生近期表达较多考试焦虑，正念技能可以有效帮助缓解焦虑，且该学生未学习过正念，适合作为入门技能。", "skill_difficulty": "初级", "alternative_skills": ["情绪调节", "痛苦耐受"], "source_chunk_ids": ["chunk_001"]}}
+{{"greeting": "谢谢你分享你此刻的心情。我能感受到你今天可能经历了一些让你感到疲惫的事情。", "question": "最近一周，有什么事情让你觉得特别有压力，或者特别开心吗？如果方便的话，可以和我聊聊。", "inquiry_focus": "近期情绪和生活状态"}}
 
 字段说明：
-- selected_skill：推荐的技能名称
+- greeting：温暖、共情的开场问候（2-3句话），必须包含对学生心情的回应
+- question：一个开放式的、了解学生近期状态的问题（1-2句话即可，不要长篇）
+- inquiry_focus：简要说明本次询问的关注方向
+
+关键禁忌：绝对不要输出 "type": "object" 这类JSON Schema元数据；只输出纯JSON对象。
+绝对不要评判学生、不要给建议、不要试图解决问题——在这个阶段你只负责了解和倾听。"""
+
+
+def build_personal_inquiry_messages(
+    *,
+    profile: Any = None,
+    mood_value: int = 3,
+    mood_note: str = "",
+) -> list[dict[str, str]]:
+    """Build messages for the personal inquiry question generation.
+
+    Args:
+        profile: UserProfile object or dict.
+        mood_value: The pre-teaching mood value (1-5).
+        mood_note: Optional note the student wrote with their mood.
+    """
+    system = _PERSONAL_INQUIRY_SYSTEM.format()
+
+    profile_text = _format_profile(profile)
+
+    mood_descriptions = {
+        1: "心情很差 😫",
+        2: "心情不太好 😟",
+        3: "心情一般 😐",
+        4: "心情不错 🙂",
+        5: "心情很好 😄",
+    }
+    mood_text = mood_descriptions.get(mood_value, "心情一般")
+
+    note_text = f" 备注：{mood_note}" if mood_note else ""
+
+    user_prompt = f"""请根据以下学生信息，生成一个温暖、共情的开场问候和了解学生近期情况的开放式问题。
+
+## 学生档案
+{profile_text}
+
+## 学生此刻的状态
+教学前心情：{mood_text}{note_text}
+
+请根据学生的年龄、困扰和当前心情，生成个性化的问候和问题。以JSON格式输出。注意：只输出纯JSON对象，以{{开头、以}}结尾。"""
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+# ── Skill Selection ──
+
+_SKILL_SELECTION_SYSTEM = """你是一名资深的DBT技能训练导师，专门为青少年学生推荐合适的DBT技能。
+
+**核心原则**：根据学生的档案和历史记录，推荐一个具体的DBT技能（而非宽泛的技能模块）。每次教学只聚焦一个具体技能，让学生能够深入练习和掌握。
+
+DBT技能体系结构（模块 → 具体技能示例）：
+- 正念（核心基础）→ 观察呼吸、身体扫描、正念行走、正念饮食、正念聆听、观察-描述-参与、不评判练习
+- 情绪调节 → 情绪命名、情绪追踪、相反行动、ABC情绪分析、积累积极情绪、事实核查
+- 痛苦耐受 → STOP技能、TIP技能（冷水刺激）、转移注意力、自我安抚（五感）、接受现实、危机生存
+- 人际效能 → DEAR MAN沟通法、GIVE技巧（维护关系）、FAST技巧（保持自尊）、设置边界、请求练习
+
+推荐规则：
+1. 优先推荐学生尚未学过的具体技能
+2. 结合学生的困扰标签和**近期个人情况**选择最相关的技能（如学生提到最近考试压力大→正念呼吸或STOP技能；提到和同学闹矛盾→人际效能相关技能）
+3. 学生主动分享的近期经历和感受是最重要的推荐依据，优先级高于历史数据
+4. 考虑学生历史测试中薄弱环节涉及的技能，重点强化
+5. 参考学生年龄和年级选择难度适当的技能
+6. 初级技能的优先级高于中高级（确保基础扎实）
+
+=== 输出格式（最重要！违反将导致系统错误）===
+
+你必须输出一个纯JSON对象。正确输出示例：
+{{"selected_module": "正念", "selected_skill": "观察呼吸", "reason": "学生近期表达较多考试焦虑，且未学习过正念相关技能。观察呼吸是正念最基础且最实用的技能，随时随地可以使用，非常适合作为DBT入门。", "skill_difficulty": "初级", "alternative_skills": ["STOP技能", "情绪命名"], "source_chunk_ids": ["chunk_001"]}}
+
+字段说明：
+- selected_module：技能所属的DBT模块名称（正念、情绪调节、痛苦耐受、人际效能 之一）
+- selected_skill：推荐的具体技能名称（必须是具体技能，如"观察呼吸"，不能是宽泛的模块名如"正念"）
 - reason：推荐理由，结合学生档案和历史记录
 - skill_difficulty：初级、中级 或 高级
-- alternative_skills：备选技能列表（2-3个）
+- alternative_skills：备选具体技能列表（2-3个）
 - source_chunk_ids：支撑推荐的知识库chunk ID列表
 
 关键禁忌：绝对不要输出 "type": "object" 这类JSON Schema元数据；只输出纯JSON对象。
@@ -123,32 +212,61 @@ def build_skill_selection_messages(
     history_skills: list[str] | None = None,
     available_modules: list[str] | None = None,
     retrieval_chunks: list[dict[str, Any]] | None = None,
+    personal_context: str = "",
+    mood_value: int | None = None,
 ) -> list[dict[str, str]]:
-    """Build messages for the skill selection task."""
+    """Build messages for the skill selection task.
+
+    Args:
+        profile: UserProfile object or dict.
+        history_skills: Previously learned skill names.
+        available_modules: Available module names with skills.
+        retrieval_chunks: Retrieved knowledge base chunks.
+        personal_context: Student's recent personal situation/experiences.
+        mood_value: Pre-teaching mood value (1-5).
+    """
     system = _SKILL_SELECTION_SYSTEM.format(
         _DBT_FABRICATION_RULE=_DBT_FABRICATION_RULE,
     )
 
     profile_text = _format_profile(profile)
     history_text = "、".join(history_skills) if history_skills else "无历史记录"
-    modules_text = "、".join(available_modules) if available_modules else "正念、情绪调节、痛苦耐受、人际效能"
+    modules_text = "、".join(available_modules) if available_modules else (
+        "正念（具体技能：观察呼吸、身体扫描、正念行走、正念饮食、观察-描述-参与）| "
+        "情绪调节（具体技能：情绪命名、事实核查、相反行动、ABC情绪分析）| "
+        "痛苦耐受（具体技能：STOP技能、TIP技能、转移注意力、自我安抚）| "
+        "人际效能（具体技能：DEAR MAN、GIVE技巧、FAST技巧、设置边界）"
+    )
     context_text = _format_chunks(retrieval_chunks or [])
 
-    user_prompt = f"""请根据以下学生信息，推荐一个最适合的DBT技能。
+    # Build personal context section (most important input for recommendation)
+    personal_section = ""
+    if personal_context:
+        mood_desc = {
+            1: "很差", 2: "不太好", 3: "一般", 4: "不错", 5: "很好",
+        }.get(mood_value or 3, "一般")
+        personal_section = f"""## 学生近期个人情况（最重要的推荐依据）
+教学前心情：{mood_desc}
+学生分享的近期经历和感受：
+{personal_context}
+
+"""
+
+    user_prompt = f"""请根据以下学生信息，从一个DBT模块中推荐一个最适合的具体技能。
 
 ## 学生档案
 {profile_text}
 
-## 已学技能历史
+{personal_section}## 已学技能历史
 {history_text}
 
-## 可选模块
+## 可选模块及其具体技能
 {modules_text}
 
 ## 检索到的知识库内容
 {context_text}
 
-请以JSON格式输出技能推荐结果。注意：只输出纯JSON对象，以{{开头、以}}结尾。"""
+请选择一个具体技能（如"观察呼吸""STOP技能""情绪命名"等），并明确其所属模块。以JSON格式输出推荐结果。注意：只输出纯JSON对象，以{{开头、以}}结尾。"""
 
     return [
         {"role": "system", "content": system},
@@ -227,6 +345,31 @@ def build_teaching_plan_messages(
     ]
 
 
+# ── Risk assessment inline hints (appended to teaching content system prompt) ──
+
+_RISK_ASSESSMENT_INLINE = (
+    "\n\n=== 风险评估要求 ===\n\n"
+    "在生成教学内容的同时，你必须同步评估学生消息的风险等级。\n\n"
+    "评估标准：\n"
+    "1. 高风险（risk_level=高）：明确表达自伤、自杀、伤害他人意图或具体计划 → should_stop_session=true\n"
+    "2. 中风险（risk_level=中）：表达严重绝望、无助，或暗示性自我伤害 → should_stop_session=false\n"
+    "3. 低风险（risk_level=低）：表达适度情绪困扰，但无自伤内容 → should_stop_session=false\n"
+    "4. 无风险（risk_level=无）：正常情绪表达、学习反馈或日常对话 → should_stop_session=false\n\n"
+    "重要：不要将正常的青少年情绪困扰过度判定为高风险。'我好烦''太难了''不想学了'等属于低风险或无风险。"
+    "只有明确的安全风险才需要should_stop_session=true。"
+    "\n\n输出中必须包含以下三个字段：\n"
+    "- risk_level：无、低、中 或 高\n"
+    "- should_stop_session：true 或 false\n"
+    "- risk_reasoning：判定理由（无风险时可为空字符串）\n\n"
+    "所有JSON输出示例中的risk字段应按上述规则真实填写，不要全部照抄示例中的'无'。"
+)
+
+_RISK_ASSESSMENT_SKIP_HINT = (
+    "\n\n=== 风险评估说明 ===\n\n"
+    "本次无需评估风险（系统已单独处理）。请在输出中统一填写："
+    "\"risk_level\": \"无\", \"should_stop_session\": false, \"risk_reasoning\": \"\""
+)
+
 # ── Teaching Content ──
 
 _TEACHING_CONTENT_SYSTEM = """你是一名亲切、耐心的DBT技能教练，正在和一名青少年学生进行一对一教学对话。
@@ -292,6 +435,7 @@ def build_teaching_content_messages(
     conversation_history: list[dict[str, str]] | None = None,
     student_message: str = "",
     retrieval_chunks: list[dict[str, Any]] | None = None,
+    include_risk_assessment: bool = False,
 ) -> list[dict[str, str]]:
     """Build messages for generating a single teaching message.
 
@@ -303,10 +447,16 @@ def build_teaching_content_messages(
         conversation_history: Prior messages in this session.
         student_message: The most recent message from the student.
         retrieval_chunks: Retrieved knowledge base chunks.
+        include_risk_assessment: If True, embed risk assessment instructions
+            so a single LLM call handles both teaching + risk.
     """
     system = _TEACHING_CONTENT_SYSTEM.format(
         _DBT_FABRICATION_RULE=_DBT_FABRICATION_RULE,
     )
+    if include_risk_assessment:
+        system += _RISK_ASSESSMENT_INLINE
+    else:
+        system += _RISK_ASSESSMENT_SKIP_HINT
 
     profile_text = _format_profile(profile)
 
@@ -357,6 +507,119 @@ def build_teaching_content_messages(
 {context_text}
 
 请以JSON格式输出你的下一条教学内容。注意：只输出纯JSON对象，以{{开头、以}}结尾，不要输出任何其他文字、思考过程或markdown标记。"""
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+# ── Streaming Teaching Content ──
+
+_STREAMING_TEACHING_SYSTEM = """你是一名亲切、耐心的DBT技能教练，正在和一名青少年学生进行一对一教学对话。
+
+**你的身份**：你是一名经过专业训练的DBT技能教练，用温暖、支持的态度引导学生学习DBT技能。
+
+**你的教学风格**：
+- 用亲切、自然的青少年能理解的语言交流（中文）
+- 每次回复聚焦一个小的教学点，不要太长
+- 多提问，引导学生思考和参与
+- 可以穿插简短的鼓励和共情
+- 对于学生的问题和困惑，先理解再回应
+
+{_DBT_FABRICATION_RULE}
+
+**输出格式与排版规则**：
+直接输出你的教学内容（自然中文对话）。不要输出JSON。
+
+排版要求（非常重要）：
+- 禁止使用任何 Markdown 标记符号：不要用 **加粗**、不要用 > 引用、不要用 --- 分隔线、不要用 # 标题、不要用 * 列表、不要用 ` 代码
+- 用自然的段落分隔：段落之间用一个空行（两个换行）分隔
+- 如果需要强调某个词，用中文自然表达（如"重要的是……""关键是……"）而非加粗符号
+- 如果需要列举要点，用中文自然表达（如"第一……第二……"）或简单的换行加空格缩进
+- 对话流程用自然的换行来组织，让阅读体验清爽
+
+在回复的最末尾，添加一行HTML注释格式的元数据：
+<!--META:{{"message_type":"讲解/提问/反馈/总结","image_prompt":"配图描述或空字符串","risk_level":"无/低/中/高","should_stop_session":false,"risk_reasoning":"判定理由或空字符串"}}-->
+
+注意：
+- 元数据必须放在<!--META:...-->内，且必须是合法JSON
+- message_type只能是：讲解、提问、反馈、总结 之一
+- image_prompt可以为空字符串
+- 正常无风险消息risk_level为"无"，should_stop_session为false
+- 只有明确的自伤/自杀/伤害他人意图才需要should_stop_session=true
+"""
+
+
+def build_streaming_teaching_messages(
+    *,
+    profile: Any = None,
+    selected_skill: str = "",
+    teaching_plan_steps: list[dict[str, Any]] | None = None,
+    current_step: int = 1,
+    conversation_history: list[dict[str, str]] | None = None,
+    student_message: str = "",
+    retrieval_chunks: list[dict[str, Any]] | None = None,
+) -> list[dict[str, str]]:
+    """Build messages for streaming teaching content generation.
+
+    Similar to build_teaching_content_messages() but the LLM is instructed
+    to output natural language (not JSON), with metadata hidden in an
+    HTML comment at the end of the response.
+    """
+    system = _STREAMING_TEACHING_SYSTEM.format(
+        _DBT_FABRICATION_RULE=_DBT_FABRICATION_RULE,
+    )
+
+    profile_text = _format_profile(profile)
+
+    plan_text = ""
+    if teaching_plan_steps:
+        steps_lines = []
+        for s in teaching_plan_steps:
+            if hasattr(s, "model_dump"):
+                step = s.model_dump()
+            elif isinstance(s, dict):
+                step = s
+            else:
+                step = s.__dict__
+            marker = " ← 当前步骤" if step.get("step_number") == current_step else ""
+            steps_lines.append(
+                f"  {step['step_number']}. {step.get('title', '')}{marker}\n     {step.get('content', '')}"
+            )
+        plan_text = "\n".join(steps_lines)
+
+    history_text = ""
+    if conversation_history:
+        history_lines = []
+        for m in conversation_history[-6:]:
+            role_label = "学生" if m.get("role") == "user" else "教师"
+            history_lines.append(f"{role_label}：{m.get('content', '')}")
+        history_text = "\n".join(history_lines)
+
+    context_text = _format_chunks(retrieval_chunks or [])
+
+    user_prompt = f"""请继续教学对话。
+
+## 学生档案
+{profile_text}
+
+## 当前技能
+{selected_skill}
+
+## 教学计划
+{plan_text}
+
+## 最近对话
+{history_text}
+
+## 学生最新消息
+{student_message}
+
+## 检索到的知识库内容
+{context_text}
+
+请直接输出你的教学内容（自然中文对话），最后附上<!--META:...-->元数据注释。"""
 
     return [
         {"role": "system", "content": system},

@@ -12,12 +12,44 @@ from pydantic import BaseModel, Field
 
 # ── Skill Selection ──
 
-class SkillSelectionResult(BaseModel):
-    """AI-driven skill recommendation for a student."""
+class PersonalInquiryResult(BaseModel):
+    """AI-generated warm inquiry to understand the student's recent situation.
 
+    Generated before skill recommendation so the student's personal context
+    can inform which skill is most appropriate.
+    """
+
+    greeting: str = Field(
+        ...,
+        description="温暖、亲切的开场问候语（包含对学生心情的共情回应）",
+        min_length=1,
+    )
+    question: str = Field(
+        ...,
+        description="了解学生近期经历和当前状态的开放式问题",
+        min_length=1,
+    )
+    inquiry_focus: str = Field(
+        default="",
+        description="本次询问的关注方向（如情绪状态、学业压力、人际关系等）",
+    )
+
+
+class SkillSelectionResult(BaseModel):
+    """AI-driven specific skill recommendation for a student.
+
+    Recommends a concrete skill within a DBT module (e.g. "观察呼吸"
+    within "正念"), not a broad module name.
+    """
+
+    selected_module: str = Field(
+        ...,
+        description="推荐的DBT模块名称（如：正念、情绪调节、痛苦耐受、人际效能）",
+        min_length=1,
+    )
     selected_skill: str = Field(
         ...,
-        description="推荐的DBT技能名称",
+        description="推荐的DBT具体技能名称（如：观察呼吸、身体扫描、STOP技能、TIP技能）",
         min_length=1,
     )
     reason: str = Field(
@@ -73,7 +105,11 @@ class TeachingPlan(BaseModel):
 # ── Teaching Content ──
 
 class TeachingContent(BaseModel):
-    """Individual teaching message generated during a session."""
+    """Individual teaching message generated during a session.
+
+    When include_risk_assessment=True, risk fields are populated from the
+    same LLM call, avoiding a separate risk-assessment API round-trip.
+    """
 
     message_type: str = Field(
         ...,
@@ -99,6 +135,20 @@ class TeachingContent(BaseModel):
     image_prompt: str = Field(
         default="",
         description="可选：若本消息描述了一个适合配图的情境（如考试场景、练习场景），填写中文图片生成prompt。留空表示不需要配图。",
+    )
+    # ── Embedded risk assessment (only populated when include_risk_assessment=True) ──
+    risk_level: str = Field(
+        default="无",
+        description="风险等级：无、低、中、高。仅在合并风险评估时填充。",
+        pattern=r"^(无|低|中|高)$",
+    )
+    should_stop_session: bool = Field(
+        default=False,
+        description="是否应立即中止会话",
+    )
+    risk_reasoning: str = Field(
+        default="",
+        description="风险判定理由",
     )
 
 
