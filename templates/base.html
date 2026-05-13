@@ -19,7 +19,7 @@
     <script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-gray-50 min-h-screen">
+<body class="bg-gray-50 min-h-screen" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
     <nav class="bg-white shadow-sm border-b">
         <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
             <a href="/" class="text-lg font-semibold text-blue-700">DBT 技能教学平台</a>
@@ -36,7 +36,7 @@
     <main class="max-w-5xl xl:max-w-6xl mx-auto px-4 py-6">
         {% block content %}{% endblock %}
     </main>
-    <script src="/static/js/media.js?v=20260512c"></script>
+    <script src="/static/js/media.js?v=20260513a"></script>
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>

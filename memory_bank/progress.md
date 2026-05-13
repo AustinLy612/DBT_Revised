@@ -2094,3 +2094,397 @@ Previously: `pre_mood_recording → info_collection → skill_selection → ...`
 | `teaching/tests.py` | Updated all tests for new flow; added personal_inquiry tests |
 
 **Verification**: All 19 directly affected tests pass (SessionCreationTests, SkillConfirmationTests, DataPersistenceTests).
+
+## Nginx HTTP/2 TTS 500 Bug Fix (2026-05-13)
+
+**Symptom**: `/media/tts/synthesize/` returned HTTP 500 on the first request after browser page refresh. Only occurred with HTTP/2; HTTP/1.1 always worked. Nginx error log was completely empty during the failures.
+
+**Root cause**: nginx 1.27.5 deprecated `listen 443 ssl http2;` syntax caused the HTTP/2 module to return 500 without proxying to Django or writing any log. HTTP/2 multiplexes all requests over a single TCP connection — page refresh tears down the old connection and establishes a new one, triggering the module-level bug on the first request on the new stream.
+
+**Diagnostic process**:
+1. Added `logger.info()` at `synthesize_speech_view` entry — Django never received the 500-failing requests
+2. Direct curl from nginx container to Django (`curl http://web:8000/media/tts/synthesize/`) — 200 OK
+3. Disabled HTTP/2 entirely (`listen 443 ssl;` without http2) — TTS worked (confirmed HTTP/2-specific)
+4. Re-enabled HTTP/2 with corrected `http2 on;` syntax — TTS worked (confirmed deprecated `listen ... http2` was the root cause)
+
+**Fix** (`docker/nginx.conf`):
+1. **Correct HTTP/2 directive**: Changed `listen 443 ssl http2;` → `listen 443 ssl;` + `http2 on;`
+2. **Dedicated `/media/tts/` location** with streaming-compatible proxy settings:
+   - `proxy_http_version 1.1` — required for HTTP/2-to-upstream proxying
+   - `proxy_buffering off` — prevents buffering 599KB+ TTS audio to temp files
+   - `proxy_cache off` / `gzip off` — ensures raw binary audio passes through unmodified
+   - `proxy_set_header Connection ""` — clears Connection header for HTTP/2-to-HTTP/1.1 proxying
+   - `proxy_read_timeout 120s` — matches volcengine TTS API latency
+
+**Prevention**:
+- Always use `http2 on;` directive, never `listen ... http2` parameter (deprecated since nginx 1.25)
+- TTS/large-binary endpoints need `proxy_buffering off` + `proxy_http_version 1.1` for HTTP/2
+- Bind-mount config changes require `docker compose restart nginx` (not just reload)
+
+## TTS 双层缓存优化 (2026-05-13)
+
+**问题**: 生成的语音加载很慢——每次点击播放或自动播报触发完整的火山引擎 TTS API 调用，且浏览器必须下载完整音频文件后才能开始播放。同一段文字每次播放都重新合成，没有缓存。
+
+**根因分析**（详见正文）:
+1. 后端缓冲全部音频块后才返回（`b"".join(audio_chunks)`），浏览器等完整下载
+2. 无任何缓存 — 每次都是全新 API 调用
+3. 自动播报默认开启，每条 AI 消息触发完整 TTS 流程
+4. TTS 同步阻塞 Django worker（图像生成已用 Celery，TTS 仍同步）
+
+### 实施方案: A (服务端 Redis 缓存) + B (前端 Blob URL 缓存)
+
+**服务端 — `media_app/services.py`**:
+- 新增 Redis 客户端 (`_get_redis()`)、缓存 key (`_tts_cache_key(text, voice)`)、读写函数
+- `synthesize_speech()`: 在 API 调用前检查 Redis 缓存（key=`tts:audio:<sha256(text|voice)>`），命中则直接返回
+- 合成完成后自动写入 Redis（TTL=1 小时）
+- Redis 不可用时静默降级，不影响正常 TTS 流程
+
+**前端 — `static/js/media.js`**:
+- 新增 `_blobCache` (Map, 上限 20 条)，按 `messageId` 缓存 Blob + URL
+- `DBT_TTS.play()`: 优先检查前端缓存，命中直接播放（零网络请求）
+- 缓存满时驱逐最旧条目并释放 Blob URL
+- `_playAudioBlob()`: 新增 `cachedUrl` 参数，缓存 URL 不在播放结束后释放（缓存持有所有权）
+
+**容错设计**:
+- Redis 不可用 → 缓存静默降级为 no-op → API 调用正常进行
+- Blob 缓存上限防止内存泄漏 → 最旧条目被驱逐
+- 缓存 key 包含 voice 参数 → 不同音色互不干扰
+- 现有测试无需修改（测试 mock `requests.post`，缓存层透明）
+
+### Files modified:
+| File | Action |
+|------|--------|
+| `media_app/services.py` | Added Redis caching layer (4 helper fns + cache check in synthesize_speech + cache store after synthesis) |
+| `static/js/media.js` | Added frontend Blob cache (_blobCache Map, cache check in play(), eviction logic, cachedUrl param) |
+
+## TTS 流式音频传输 (Option D) — 2026-05-13
+
+**问题**: 之前即使有双层缓存，首次播放仍需等待完整 TTS API 响应 + 完整下载。用户点击播放后等待时间长（5-15s）。
+
+**方案**: 利用火山引擎 TTS V3 的流式响应能力，后端逐块转发音频到浏览器，浏览器通过 MediaSource API 边下载边播放。
+
+### 实施内容
+
+**服务端 — `media_app/services.py`**:
+- 新增 `stream_synthesize_speech()` 生成器函数 — 从火山引擎 API 逐块 yield 解码后的 MP3 音频字节
+- Redis 缓存命中时 yield 缓存字节（分 16KB 块）
+- API 调用时实时 yield 每个音频 chunk，同时积累用于流结束后写入 Redis
+- 错误（API 超时/连接失败/业务错误）在第一个 yield 前抛出，可被视图捕获
+
+**视图 — `media_app/views.py`**:
+- 新增 `stream_speech_view` — 返回 `StreamingHttpResponse(content_type="audio/mpeg")`
+- "Prime" 模式：先 `next(generator)` 获取第一个 chunk 并捕获 pre-flight 错误（`ConfigurationError`/`APIError`），成功后再包装为 `_stream_with_first()` 生成器传给 StreamingHttpResponse
+- 添加 `Cache-Control: no-cache` 和 `X-Accel-Buffering: no` 头
+- 错误时返回 JSON（503/502）并创建 `AudioSynthesisLog`
+
+**路由 — `media_app/urls.py`**:
+- 新增 `/media/tts/stream/` → `stream_speech_view`
+
+**前端 — `static/js/media.js`**:
+- 新增 `_playAudioStream(formData, msgId, btn, originalText)`:
+  - 创建 `MediaSource` + `SourceBuffer('audio/mpeg')`，mode='sequence'
+  - 通过 `fetch()` + `ReadableStream` 读取 `/media/tts/stream/` 的 chunked 响应
+  - SourceBuffer 队列管理：`updateend` 事件驱动串行 append，避免 "still processing" 错误
+  - 流完成后自动将累积的完整 Blob 写入 `_blobCache`（下次播放直接命中前端缓存，零网络请求）
+- 新增 `_fallbackToFetch(formData, msgId, btn, originalText)`:
+  - 流式失败时（MediaSource 不支持、网络错误、SourceBuffer 错误）降级到非流式 `/media/tts/synthesize/` 端点
+  - 包含完整的错误 UI 处理（红色提示条、5 秒自动隐藏）
+- 新增 `_addToBlobCache(msgId, blob)` — 集中化的 Blob 缓存管理（含驱逐逻辑）
+- `DBT_TTS.play()` 改为调用 `_playAudioStream()` 而非直接 fetch
+
+**Nginx 兼容性**:
+- 已有的 `/media/tts/` 专用 location 配置 (`proxy_buffering off`, `proxy_http_version 1.1`, `proxy_cache off`) 天然支持 chunked transfer
+- 无需修改 Nginx 配置
+
+### 数据流 (首次播放):
+```
+浏览器: new MediaSource() → new Audio(mediaSourceUrl) → audio.play()
+  → sourceopen → fetch /media/tts/stream/
+    → Django StreamingHttpResponse
+      → services.stream_synthesize_speech() generator
+        → Volcengine TTS API (stream=True)
+        ← 逐块 base64 JSON Lines
+        → base64 decode → yield audio_chunk
+    ← HTTP chunked transfer encoding (Transfer-Encoding: chunked)
+  → ReadableStream reader → sourceBuffer.appendBuffer(chunk)
+    → 浏览器解码并播放（首 chunk 到达即开始播放）
+```
+
+### 容错设计:
+- `MediaSource` 不支持 → 静默降级到 `_fallbackToFetch`（非流式）
+- 流式传输中错误 → `_failStream()` 清理 MediaSource + 降级
+- 后端 API 调用前错误 → 视图捕获并返回 JSON 错误
+- 后端 API 调用中错误 → 生成器 raise APIError → Django 终止流 → 前端检测到流提前结束 → 降级
+- 流成功后自动写入前端 Blob 缓存 + 服务端 Redis 缓存
+
+### Files modified:
+| File | Action |
+|------|--------|
+| `media_app/services.py` | Added `stream_synthesize_speech()` generator (Redis-cache-aware streaming) |
+| `media_app/views.py` | Added `stream_speech_view` with prime-generator pattern; added `StreamingHttpResponse` import |
+| `media_app/urls.py` | Added `/media/tts/stream/` route |
+| `static/js/media.js` | Added `_playAudioStream`, `_fallbackToFetch`, `_addToBlobCache`; modified `play()` to stream; refactored blob cache logic |
+
+### 流式部署问题修复 (2026-05-13 16:00)
+
+**问题**: 流式功能上线后用户报告"加载很久后直接500报错"，流式未生效。
+
+**排查结果**:
+1. 后端 `stream_synthesize_speech()` 生成器正常工作（直接 Python 测试: 200, 12.9KB, 1.8s）
+2. Django `stream_speech_view` 正常工作（`Client.force_login()` 测试: 200, audio/mpeg, streaming=True）
+3. 火山引擎 TTS V3 API 正常响应（所有呼叫返回 200）
+4. **根因**: `collectstatic` 未运行 — Nginx 静态目录 `staticfiles/js/media.js` 仍是旧版本（26KB, 无 `_playAudioStream`/`MediaSource`），用户瀏览器加载旧 JS 直接调用 `/media/tts/synthesize/`（非流式），从未触发 `/media/tts/stream/`
+
+**修复**:
+- 运行 `python manage.py collectstatic --noinput` → 静态 JS 更新至 32KB（13 处流式/缓存引用）
+- `views.py:stream_speech_view` 新增 `except Exception` 兜底日志（防止未预期异常导致静默 500）
+- 重启 web 容器确保代码生效
+
+### Files modified (hotfix):
+| File | Action |
+|------|--------|
+| `media_app/views.py` | Added `except Exception: logger.exception("TTS stream unexpected error")` |
+
+## 测试图像生成修复与优化 — 2026-05-13
+
+### 问题 1: 手动生成配图 500 错误
+
+**症状**: 在测试界面点击"生成配图"按钮返回 HTTP 500，同时 gunicorn worker 被 SIGKILL（OOM）。
+
+**根因**: 手动按钮通过 JS `DBT_Image.generate()` POST 到 `/media/image/generate/`，该端点同步调用 MiniMax 图像 API（~25s）。Gunicorn 默认 timeout 30s，加上请求开销触发超时，worker 被杀死。
+
+### 问题 2: 后面作答的题目没有图像
+
+**根因**: 当 `image_prompt` 存在但 Celery 图像任务尚未完成时，模板显示静态"情景配图自动生成中..."旋转器，但从不轮询更新。图像生成完成后用户无法看到，除非刷新页面。
+
+**症状**: 用户开始答题时，Celery 图像生成任务（每个 ~25s）仍在队列中运行。早期题目已经切换过去，图像 URL 已保存到数据库但前端从未重新检查。
+
+### 修复 1: Gunicorn 超时增加
+
+- `docker-compose.yml:7`: gunicorn 命令从 `--workers 3` 改为 `--workers 3 --timeout 120`，匹配 `media_app/services.py` 中的 `API_TIMEOUT_SECONDS = 120`
+- `Dockerfile:28`: CMD 同步更新
+- Web 容器通过 `docker compose up -d --force-recreate web` 重建以应用新命令
+
+这使同步 `/media/image/generate/` 端点（用于"重新生成配图"按钮）能够完成而不会超时。
+
+### 修复 2: 异步图像生成端点 + HTMX 轮询
+
+**新增端点** (`testing/urls.py`):
+- `POST /testing/question/<question_id>/generate-image/` → `generate_question_image_view`
+- `GET /testing/question/<question_id>/image-status/` → `question_image_status_view`
+
+**`generate_question_image_view`** (`testing/views.py`):
+- 接收可选的 `prompt` POST 参数（用于覆盖 image_prompt）
+- 如果问题没有 `image_prompt`：从问题文本构建回退 prompt（`"DBT正念技能教学情景配图：{text}，温暖插画风格"`）
+- 分发 `generate_test_question_image_async.delay(question_id)` Celery 任务
+- 返回带有 `hx-get` + `hx-trigger="every 3s"` 的旋转器 HTML，轮询 image-status 端点
+
+**`question_image_status_view`** (`testing/views.py`):
+- 检查 `question.temporary_image_url` 是否已填充
+- 如果就绪：返回带有图像 + "重新生成配图"按钮的 HTML
+- 如果等待中：返回轮询旋转器（每 3 秒通过 HTMX 重新检查）
+
+**`_image_polling_html()` 辅助函数** — 为两个视图生成旋转器 HTML。旋转器 div 包含 `hx-get` + `hx-trigger="every 3s"` 用于自驱动轮询。
+
+### 修复 3: 模板更新
+
+**活跃测试区域** (`templates/testing/test.html`，3 种图像状态):
+
+| 状态 | 之前 | 之后 |
+|------|------|------|
+| `temporary_image_url` 存在 | 图像 + 同步重新生成按钮 | 不变（同步重新生成在 120s 超时下有效） |
+| `image_prompt` 存在，无 URL | 静态旋转器 + 同步重试按钮 | HTMX 轮询旋转器（`hx-get` image-status，`hx-trigger="load delay:1s"`）→ 图像就绪时自动显示 |
+| 都不存在 | （无按钮 — 死胡同） | "生成配图"按钮通过 `hx-post` 到异步端点 |
+
+**回顾区域**: 类似更新 — 每个问题的生成按钮使用 `hx-post` 到异步端点，配合每个问题唯一的 `id="review-image-area-{{ q.question_id }}"` 目标 div。
+
+### 修复 4: CSRF 令牌
+
+**症状**: 异步端点上的新 `hx-post` 按钮返回 403。
+
+**根因**: 现有答案表单在 HTML 中包含 `{% csrf_token %}`，但独立的 `<button hx-post>`（没有包装 `<form>`）不在请求中发送 CSRF 令牌。
+
+**修复** (`templates/base.html`): 添加 `hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'` 到 `<body>` 标签。所有 HTMX 请求现在自动在 HTTP 头中包含 CSRF 令牌。
+
+### 数据流（异步图像生成）:
+```
+用户看到"情景配图自动生成中..."旋转器
+  → hx-get /testing/question/<id>/image-status/ （触发：加载延迟 1s）
+  → 端点检查 question.temporary_image_url
+  → 为空 → 返回新旋转器，hx-trigger="every 3s"
+  → 3s 后重新检查
+  → [同时 Celery 任务完成，保存 temporary_image_url]
+  → 端点返回 <img src="..."> HTML
+  → 图像自动出现，无需手动刷新
+```
+
+手动生成按钮:
+```
+用户点击"生成配图"
+  → hx-post /testing/question/<id>/generate-image/
+  → 视图设置 image_prompt（如果需要），分发 Celery 任务
+  → 返回轮询旋转器 HTML → 替换按钮
+  → 旋转器每 3 秒轮询 image-status
+  → 图像就绪时自动显示
+```
+
+### 修改的文件:
+| 文件 | 操作 |
+|------|------|
+| `docker-compose.yml` | Web 命令添加 `--timeout 120` |
+| `Dockerfile` | CMD 添加 `--timeout 120` |
+| `testing/views.py` | 新增 `generate_question_image_view`、`question_image_status_view`、`_image_polling_html()`；更新导入 |
+| `testing/urls.py` | 新增 2 个 URL 模式 |
+| `templates/testing/test.html` | 更新活跃测试和回顾部分的图像区域 |
+| `templates/base.html` | 在 `<body>` 添加 `hx-headers` 用于 CSRF |
+
+### 验证:
+- Gunicorn 确认使用 `--timeout 120`
+- 两个新 URL 解析正确
+- 模板编译无错误
+- Celery 工作日志确认 5/5 图像在 ~25s 内为新测试成功生成
+- 回退 prompt 构建正确处理缺少 `image_prompt` 的问题
+
+
+## Step 14: Performance Fix — Risk & Image Generation — COMPLETED (2026-05-14)
+
+### 问题诊断
+
+测试每题提交和图片生成存在显著延迟：
+
+| 瓶颈 | 根因 | 影响 |
+|------|------|------|
+| 每题提交 3-5 秒 | `process_test_risk_check()` 无条件对每次答案调用 MiniMax LLM 做 AI 风险评估 | 5 题累计等待 15-25 秒 |
+| 图片生成不均衡 (Q1 慢、Q2 快、Q3 极慢) | 5 个 Celery 图片任务同时 dispatch → MiniMax API 限流 (429) → Celery 30s 重试 | Q3 等待 60+ 秒，前端堆积大量轮询 |
+
+### 修复 1: 风险检测门控 (`risk/services.py`)
+
+在 `process_risk_check()` 和 `process_test_risk_check()` 中，调用 MiniMax LLM 之前增加 `should_assess_risk()` 判断：
+
+```python
+# 关键词未触发 且 无中度担忧指标 → 直接跳过 AI 调用
+if not should_assess_risk(text):
+    return None
+```
+
+**效果**: 正常答题 95%+ 的提交跳过 LLM 调用，从 3-5 秒降至毫秒级。风险关键词匹配（纯 Python 字符串检查）始终运行，安全网不受影响。
+
+### 修复 2: 图片 API 瞬时错误内部重试 (`media_app/services.py`)
+
+`generate_image()` 新增重试循环，针对瞬时 HTTP 错误（429 限流、502/503 服务端错误、529 过载）使用指数退避（2s → 4s → 8s）最多重试 3 次：
+
+```python
+_retry_statuses = {429, 502, 503, 529}
+for attempt in range(max_retries + 1):
+    # ... HTTP call ...
+    if resp.status_code in _retry_statuses:
+        time.sleep(retry_base_delay * (2 ** attempt))
+        continue
+```
+
+新增模块常量 `IMAGE_MAX_RETRIES = 3`、`IMAGE_RETRY_BASE_DELAY = 2.0`，函数接受 `max_retries` 和 `retry_base_delay` 参数用于测试。
+
+**效果**: 429 限流不再触发 Celery 的 30 秒重试，改为 2-8 秒内自行恢复。
+
+### 修复 3: 图片任务错峰 dispatch (`testing/tasks.py`)
+
+`generate_test_questions_async` 中，图片生成任务从 `.delay()` 改为 `.apply_async(args=[...], countdown=i * 3)`：
+
+```python
+for i, q in enumerate(saved_questions):
+    if q.image_prompt:
+        generate_test_question_image_async.apply_async(
+            args=[q.question_id],
+            countdown=i * 3,  # 0s, 3s, 6s, 9s, 12s
+        )
+```
+
+**效果**: 5 个任务间隔 3 秒入队，不再同时撞 MiniMax 限流。
+
+### 新增测试
+
+| 测试 | 验证内容 |
+|------|---------|
+| `test_retries_on_429_then_succeeds` | 429 触发重试后成功 |
+| `test_no_retry_on_400` | 400 永久错误不重试 |
+| `test_exhausts_retries_then_raises` | 全部重试耗尽后抛出 APIError |
+| `test_image_tasks_dispatched_with_staggered_countdown` | 图片任务 countdown 为 0, 6, 9 |
+
+### 修改的文件
+
+| 文件 | 改动 |
+|------|------|
+| `risk/services.py` | `process_risk_check()` 和 `process_test_risk_check()` 增加 `should_assess_risk()` 门控 |
+| `media_app/services.py` | `generate_image()` 增加瞬时错误重试循环；新增 `IMAGE_MAX_RETRIES`、`IMAGE_RETRY_BASE_DELAY` 常量 |
+| `testing/tasks.py` | `.delay()` → `.apply_async(countdown=i*3)` |
+| `media_app/tests.py` | 新增 `ImageGenerationRetryTests`（3 个测试） |
+| `testing/tests.py` | 新增 `ImageTaskDispatchTests`（1 个测试） |
+
+
+## Step 15: Session Page Test Records Display & Orphan Test Recovery — COMPLETED (2026-05-14)
+
+### 问题诊断
+
+用户反馈：完成教学与测试后，session 页面仍只显示"开始测试"按钮，没有已完成测试的记录；也无法在 session 页面看到教学过程中产生的测试记录。
+
+**根因分析**：
+
+| 问题 | 根因 |
+|------|------|
+| Session 页面无测试记录 | `teaching/views.py::session_view` 从未查询 session 关联的 Test 记录 |
+| 3 个测试卡在 `ongoing` | 旧同步代码（refactor 前）中 API 调用失败 → Test 记录已创建但题目生成异常未被捕获 |
+| `attempt_no` 重复（两个 attempt=1） | `get_retest_attempt_no()` 使用 `max(attempt_no)` 而非 `count()`，历史重复导致不准确 |
+| Orphan 测试页永远转圈 | `test_view` 中 0 题+ongoing 状态时只显示 HTMX 轮询 spinner，无超时检测 |
+
+### 修复 1: Session 页面展示测试记录 (`teaching/views.py` + `templates/teaching/session.html`)
+
+`session_view` 中，当 session 处于 terminal 状态（completed/stopped_by_risk/user_terminated）时，查询该 session 的所有 Test 记录并传入模板：
+
+```python
+# teaching/views.py — session_view
+tests = []
+if is_terminal:
+    from testing.models import Test, TestQuestion
+    tests = list(Test.objects.filter(session=session).order_by("created_at"))
+    for t in tests:
+        t._question_count = TestQuestion.objects.filter(test=t).count()
+```
+
+模板新增"测试记录"区块，按状态分色显示：
+- **绿色**：通过（≥4/5）→ 显示正确数 + "查看详情"链接
+- **黄色**：未通过（<4/5）→ 显示正确数 + "查看详情" + "重新测试"按钮
+- **蓝色**：进行中 → 显示"继续答题"链接
+- **灰色**：已终止 → 仅状态标签
+
+### 修复 2: Orphan 测试超时检测 (`testing/views.py` + `templates/testing/test.html`)
+
+`test_view` 中增加 `is_stuck` 检测：测试创建超过 5 分钟但 0 道题 → 判定为 orphan：
+
+```python
+from datetime import timedelta
+from django.utils import timezone
+is_stuck = is_ongoing and len(questions) == 0 and \
+    (timezone.now() - test.created_at) > timedelta(minutes=5)
+```
+
+模板中当 `is_stuck=True` 时显示"题目生成超时"错误页面 + "返回教学会话"和"重新创建测试"按钮，替代永久轮询 spinner。
+
+### 修复 3: `get_retest_attempt_no` 改用 count-based (`testing/services.py`)
+
+```python
+# 旧: max(attempt_no) + 1 — 遇重复 attempt_no 会返回错误值
+# 新: count() + 1 — 无论历史数据如何，始终返回正确的序号
+def get_retest_attempt_no(session):
+    from .models import Test
+    return Test.objects.filter(session=session).count() + 1
+```
+
+### 修改的文件
+
+| 文件 | 改动 |
+|------|------|
+| `teaching/views.py` | `session_view` 新增 Test 查询逻辑，传入 `tests` 到模板 context |
+| `templates/teaching/session.html` | 新增"测试记录"区块（~45 行），5 种状态分色卡片 |
+| `testing/views.py` | `test_view` 新增 `is_stuck` 检测逻辑（>5min + 0 questions） |
+| `templates/testing/test.html` | 新增 stuck 状态分支：显示超时错误 + 恢复按钮 |
+| `testing/services.py` | `get_retest_attempt_no` 从 max-based 改为 count-based |

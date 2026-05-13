@@ -144,6 +144,10 @@ def process_risk_check(
     """
     triggered, keywords = check_keyword_risk(text)
 
+    # Skip AI call for text with no risk indicators — keyword-only is enough.
+    if not should_assess_risk(text):
+        return None
+
     from knowledge_base.rag.chains import run_risk_assessment
     from knowledge_base.rag.llm_client import APIError
 
@@ -213,6 +217,10 @@ def process_test_risk_check(
         Risk dict if risk was assessed, None if no concern detected.
     """
     triggered, keywords = check_keyword_risk(text)
+
+    # Skip AI call for text with no risk indicators — keyword-only is enough.
+    if not should_assess_risk(text):
+        return None
 
     from knowledge_base.rag.chains import run_risk_assessment
     from knowledge_base.rag.llm_client import APIError

@@ -64,9 +64,9 @@ class ImageGenerationLog(models.Model):
 
 
 class AudioSynthesisLog(models.Model):
-    """Metadata log for MiniMax TTS (text-to-speech) calls.
+    """Metadata log for TTS (text-to-speech) calls.
 
-    Audio files are NOT persisted — temporary_url expires.
+    Audio files are NOT persisted.
     """
 
     class Status(models.TextChoices):
@@ -80,7 +80,7 @@ class AudioSynthesisLog(models.Model):
         "accounts.User", on_delete=models.CASCADE, related_name="tts_syntheses"
     )
     text = models.TextField()
-    model = models.CharField(max_length=64, default="speech-2.8-turbo")
+    model = models.CharField(max_length=64, default="volcengine-tts")
     voice = models.CharField(max_length=64, blank=True, default="")
     temporary_audio_url = models.TextField(blank=True, default="")
     status = models.CharField(

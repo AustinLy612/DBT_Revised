@@ -93,8 +93,16 @@ DATABASES = {
         "OPTIONS": {
             "authSource": env("MONGODB_NAME", default="dbt_platform"),
         },
+        # Explicit test database isolation:
+        # SafetyTestRunner enforces this prefix before any tests run.
+        "TEST": {
+            "NAME": f"test_{env('MONGODB_NAME', default='dbt_platform')}",
+        },
     }
 }
+
+# ── Test runner — prevents tests from touching production data ──
+TEST_RUNNER = "dbt_platform.test_runner.SafetyTestRunner"
 
 # ── Password validation ──
 AUTH_PASSWORD_VALIDATORS = [
@@ -165,8 +173,14 @@ QDRANT_COLLECTION = env("QDRANT_COLLECTION", default="dbt_knowledge")
 MINIMAX_API_KEY = env("MINIMAX_API_KEY", default="")
 MINIMAX_BASE_URL = env("MINIMAX_BASE_URL", default="https://api.minimaxi.com")
 
-# ── Volcengine (火山引擎) ASR — optional, for voice input ──
+# ── Volcengine (火山引擎) — ASR + TTS ──
+# API Key is shared across volcengine speech services (ASR + TTS).
+# Obtain from https://console.volcengine.com → 语音技术 → API Key管理 (new console)
 VOLCENGINE_API_KEY = env("VOLCENGINE_API_KEY", default="")
+
+# TTS V3 API uses X-Api-Key + X-Api-Resource-Id (no appid needed).
+# Speaker ID for seed-tts-2.0 model (e.g., zh_female_shuangkuaisisi_moon_bigtts)
+VOLCENGINE_TTS_SPEAKER = env("VOLCENGINE_TTS_SPEAKER", default="zh_female_xueayi_saturn_bigtts")
 
 # ── Session / CSRF for cross-device consistency ──
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])

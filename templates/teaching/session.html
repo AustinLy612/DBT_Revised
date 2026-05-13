@@ -81,6 +81,52 @@
             </div>
         </div>
 
+        {% if tests %}
+        <div class="bg-white border rounded-lg p-4 mb-4">
+            <h3 class="text-sm font-semibold text-gray-700 mb-3">测试记录</h3>
+            <div class="space-y-3">
+                {% for t in tests %}
+                <div class="border rounded-lg p-3 {% if t.status == 'completed' %}{% if t.passed %}bg-green-50 border-green-200{% else %}bg-yellow-50 border-yellow-200{% endif %}{% elif t.status == 'user_terminated' %}bg-gray-50 border-gray-200{% else %}bg-blue-50 border-blue-200{% endif %}">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-medium text-gray-600">第 {{ t.attempt_no }} 次测试</span>
+                            {% if t.status == 'completed' %}
+                                {% if t.passed %}
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-green-200 text-green-800">通过</span>
+                                {% else %}
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-yellow-200 text-yellow-800">未通过</span>
+                                {% endif %}
+                            {% elif t.status == 'user_terminated' %}
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">已终止</span>
+                            {% else %}
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-blue-200 text-blue-800">进行中</span>
+                            {% endif %}
+                        </div>
+                        <span class="text-xs text-gray-400">{{ t.created_at|date:"m-d H:i" }}</span>
+                    </div>
+                    {% if t.status == 'completed' %}
+                    <div class="text-sm text-gray-700">
+                        正确：<span class="font-medium {% if t.passed %}text-green-700{% else %}text-yellow-700{% endif %}">{{ t.correct_count }}/{{ t.total_questions }}</span>
+                        <span class="text-xs text-gray-400 ml-2">（需答对 ≥ 4 题通过）</span>
+                    </div>
+                    {% endif %}
+                    {% if t.status == 'completed' or t.status == 'ongoing' %}
+                    <a href="{% url 'testing:test' t.test_id %}" class="inline-block mt-2 text-xs text-blue-600 hover:text-blue-800">
+                        {% if t.status == 'completed' %}查看详情{% else %}继续答题 →{% endif %}
+                    </a>
+                    {% endif %}
+                    {% if t.status == 'completed' and not t.passed %}
+                    <form method="post" action="{% url 'testing:retest' t.test_id %}" class="inline ml-2">
+                        {% csrf_token %}
+                        <button type="submit" class="text-xs text-orange-600 hover:text-orange-800">重新测试</button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         {% if conversation %}
         <div class="bg-white border rounded-lg p-4">
             <h3 class="text-sm font-semibold text-gray-500 mb-3">对话记录</h3>
@@ -105,6 +151,15 @@
                     </div>
                 </div>
                 {% endfor %}
+            </div>
+            <div id="audio-player-bar" class="hidden bg-blue-50 border-t border-blue-200 px-4 py-2.5 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="text-blue-500 text-sm">🔊</span>
+                    <span id="audio-bar-status" class="text-sm text-gray-700">正在播放语音...</span>
+                </div>
+                <button onclick="DBT_TTS.stop()"
+                        class="text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full w-7 h-7 flex items-center justify-center transition text-lg leading-none"
+                        title="关闭语音">✕</button>
             </div>
         </div>
         {% endif %}
@@ -310,6 +365,16 @@
                             </div>
                         </div>
                         {% endfor %}
+                    </div>
+                    {# ── Audio player bar (shown when TTS is playing, outside scroll area) ── #}
+                    <div id="audio-player-bar" class="hidden bg-blue-50 border-t border-blue-200 px-4 py-2.5 flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="text-blue-500 text-sm">🔊</span>
+                            <span id="audio-bar-status" class="text-sm text-gray-700">正在播放语音...</span>
+                        </div>
+                        <button onclick="DBT_TTS.stop()"
+                                class="text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full w-7 h-7 flex items-center justify-center transition text-lg leading-none"
+                                title="关闭语音">✕</button>
                     </div>
 
                     <div class="border-t p-3">

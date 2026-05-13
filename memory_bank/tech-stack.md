@@ -73,8 +73,8 @@
 | Broker / Cache | Redis 7 |
 | 对象存储 | MinIO |
 | LLM | MiniMax `MiniMax-M2.7` |
-| TTS | MiniMax `speech-2.8-turbo`，高质量可切 `speech-2.8-hd` |
-| ASR | MiniMax 优先 |
+| TTS | 火山引擎 `豆包语音合成模型2.0` (Volcengine TTS) |
+| ASR | 火山引擎 (Volcengine ASR) |
 | 图像生成 | MiniMax `image-01`，低延迟可切 `image-01-live` |
 | 部署 | Docker Compose + Nginx(`10443`) + HTTPS |
 | 测试 | pytest + Playwright |
@@ -345,8 +345,9 @@ MongoDB Django backend 的一个重要限制是：
 
 ### TTS
 
-- 默认：`speech-2.8-turbo`
-- 高质量可选：`speech-2.8-hd`
+- 供应商：火山引擎（Volcengine）豆包语音合成模型2.0
+- 默认音色：`BV700_streaming`（灿灿2.0 温暖女声）
+- API：`POST https://openspeech.bytedance.com/api/v1/tts`，鉴权 `Authorization: Bearer;{token}`
 
 用途：
 

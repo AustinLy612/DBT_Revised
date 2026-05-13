@@ -68,7 +68,12 @@ def _call_llm_or_mock(
         Validated dict matching the schema.
     """
     if mock_llm_response is not None:
-        return OutputValidator.validate_and_repair(mock_llm_response, schema_model)
+        try:
+            return OutputValidator.validate_and_repair(mock_llm_response, schema_model)
+        except Exception as exc:
+            raise APIError(
+                f"Mock validation failed for {schema_model.__name__}: {exc}"
+            ) from exc
 
     raw_result = minimax_chat_completion(
         messages,
@@ -82,9 +87,19 @@ def _call_llm_or_mock(
         parsed = json.loads(content)
     except json.JSONDecodeError as exc:
         logger.warning("LLM returned non-JSON. Attempting repair. Error: %s", exc)
-        parsed = OutputValidator.repair_json(content)
+        try:
+            parsed = OutputValidator.repair_json(content)
+        except Exception as repair_exc:
+            raise APIError(
+                f"LLM returned unrepairable JSON for {schema_model.__name__}: {repair_exc}"
+            ) from repair_exc
 
-    return OutputValidator.validate_and_repair(parsed, schema_model)
+    try:
+        return OutputValidator.validate_and_repair(parsed, schema_model)
+    except Exception as exc:
+        raise APIError(
+            f"LLM output validation failed for {schema_model.__name__}: {exc}"
+        ) from exc
 
 
 # ── Personal Inquiry ──
@@ -186,6 +201,51 @@ def generate_teaching_plan(
 
     result = _call_llm_or_mock(messages, TeachingPlan, mock_llm_response)
     return TeachingPlan(**result)
+
+
+# ── Teaching Opening (AI initiates the conversation) ──
+
+
+def generate_teaching_opening(
+    *,
+    profile: Any = None,
+    selected_skill: str = "",
+    selected_module: str = "",
+    selection_reason: str = "",
+    personal_context: str = "",
+    teaching_plan_steps: list[Any] | None = None,
+    retriever: DBTRetriever | None = None,
+    mock_llm_response: dict[str, Any] | None = None,
+) -> TeachingContent:
+    """Generate the AI's opening message when the teaching phase begins.
+
+    This allows the AI to initiate the conversation — the student doesn't
+    need to send the first message.  The opening greets the student,
+    introduces the skill, and leads into the first teaching point.
+    """
+    from .prompts import build_teaching_opening_messages
+    from .retriever import get_retriever
+
+    is_mock = mock_llm_response is not None
+    if is_mock:
+        chunks = []
+    else:
+        ret = retriever or get_retriever(k=3, use_case="teaching")
+        query = f"{selected_skill} 入门介绍 基础概念"
+        chunks = ret.search_with_context(query)
+
+    messages = build_teaching_opening_messages(
+        profile=profile,
+        selected_skill=selected_skill,
+        selected_module=selected_module,
+        selection_reason=selection_reason,
+        personal_context=personal_context,
+        teaching_plan_steps=teaching_plan_steps,
+        retrieval_chunks=chunks,
+    )
+
+    result = _call_llm_or_mock(messages, TeachingContent, mock_llm_response)
+    return TeachingContent(**result)
 
 
 # ── Teaching Content ──

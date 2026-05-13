@@ -18,8 +18,6 @@ from django.db import models
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from knowledge_base.rag.llm_client import APIError, ConfigurationError
-
 from risk.services import check_keyword_risk  # noqa: F401 — re-exported for callers
 
 logger = logging.getLogger("dbt_platform.testing")
@@ -28,9 +26,9 @@ logger = logging.getLogger("dbt_platform.testing")
 def create_test(session: models.Model, user: models.Model, attempt_no: int = 1) -> models.Model:
     """Create a new test for a completed teaching session.
 
-    Generates 5 questions via the RAG chain.  If the chain fails the test
-    is still created but left in ONGOING status with zero questions so
-    the view can show a retry prompt.
+    Creates the Test record immediately.  Question generation is dispatched
+    asynchronously via Celery — the caller should call
+    ``generate_test_questions_async.delay(test.test_id)`` after this returns.
     """
     from .models import Test
 
@@ -42,15 +40,6 @@ def create_test(session: models.Model, user: models.Model, attempt_no: int = 1) 
     )
     logger.info("Created test %s (attempt %d) for session %s",
                 test.test_id, attempt_no, session.session_id)
-
-    try:
-        _generate_and_save_questions(test, user, session)
-    except (ConfigurationError, APIError) as exc:
-        logger.error("Test question generation failed for test %s: %s", test.test_id, exc)
-        test.status = Test.Status.USER_TERMINATED
-        test.save(update_fields=["status"])
-        raise
-
     return test
 
 
@@ -63,7 +52,7 @@ def get_test_or_404(test_id: str, user: models.Model) -> models.Model:
 # Question generation
 # ═══════════════════════════════════════════════════════════════
 
-def _generate_and_save_questions(
+def generate_and_save_questions(
     test: models.Model,
     user: models.Model,
     session: models.Model,
@@ -124,6 +113,7 @@ def _generate_and_save_questions(
     saved_questions = []
     for q_data in questions_data.get("questions", []):
         correct_int = q_data.get("correct_option", 0)
+        image_prompt = q_data.get("image_prompt", "").strip()
         saved = TestQuestion.objects.create(
             test=test,
             question_text=q_data.get("question_text", ""),
@@ -131,6 +121,7 @@ def _generate_and_save_questions(
             correct_option=str(correct_int),
             explanation=q_data.get("explanation", ""),
             source_chunk_ids=q_data.get("source_chunk_ids", []),
+            image_prompt=image_prompt,
         )
         saved_questions.append(saved)
 
@@ -291,7 +282,10 @@ def process_test_risk(
 # ═══════════════════════════════════════════════════════════════
 
 def get_retest_attempt_no(session: models.Model) -> int:
-    """Get the next attempt number for a retest on this session."""
+    """Get the next attempt number for a retest on this session.
+
+    Uses count rather than max(attempt_no) to avoid duplicate attempt_no
+    from orphan tests left behind by failed synchronous generation.
+    """
     from .models import Test
-    last = Test.objects.filter(session=session).order_by("-attempt_no").first()
-    return (last.attempt_no + 1) if last else 1
+    return Test.objects.filter(session=session).count() + 1

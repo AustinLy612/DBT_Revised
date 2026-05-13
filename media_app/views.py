@@ -10,7 +10,7 @@ import logging
 from http import HTTPStatus
 
 from django.contrib.auth.decorators import login_required
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 
@@ -128,12 +128,12 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
 @login_required
 @csrf_exempt
 def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
-    """Synthesize speech from text and return audio bytes.
+    """Synthesize speech from text via Volcengine TTS and return audio bytes.
 
     POST params:
         text: Text to synthesize.
-        model: Optional model ID (default: speech-2.8-turbo).
-        voice: Optional voice ID.
+        model: Optional model label (for logging).
+        voice: Optional voice type ID.
         message_id: Optional ChatMessage ID for logging.
 
     Returns audio/mpeg binary on success, or error JSON.
@@ -141,12 +141,19 @@ def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
     if request.method != "POST":
         return JsonResponse({"error": "Method not allowed"}, status=405)
 
+    logger.info("TTS request received: user=%s, text_len=%d, message_id=%s",
+                request.user.username, len(request.POST.get("text", "")),
+                request.POST.get("message_id", "")[:36])
+
     text = request.POST.get("text", "").strip()
     if not text:
         return JsonResponse({"error": "文本不能为空"}, status=400)
 
     if len(text) > 3000:
         text = text[:3000]
+    # Trim to ~1000 bytes for volcengine TTS limit (UTF-8 Chinese ≈ 3 bytes/char)
+    while len(text.encode("utf-8")) > 1000:
+        text = text[:-1]
 
     model = request.POST.get("model", services.DEFAULT_TTS_MODEL)
     voice = request.POST.get("voice", "")
@@ -203,6 +210,72 @@ def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
         return JsonResponse({"audio_url": audio_url, "format": result.get("format", "mp3")})
 
     return JsonResponse({"error": "未能获取音频数据"}, status=502)
+
+
+@login_required
+@csrf_exempt
+def stream_speech_view(request: HttpRequest) -> HttpResponse:
+    """Stream synthesized speech via chunked transfer encoding.
+
+    POST params:
+        text: Text to synthesize.
+        voice: Optional voice type ID.
+        message_id: Optional ChatMessage ID for logging.
+
+    Returns StreamingHttpResponse (audio/mpeg) with chunked transfer,
+    or JSON error on configuration / pre-flight failure.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    text = request.POST.get("text", "").strip()
+    if not text:
+        return JsonResponse({"error": "文本不能为空"}, status=400)
+
+    if len(text) > 3000:
+        text = text[:3000]
+    while len(text.encode("utf-8")) > 1000:
+        text = text[:-1]
+
+    voice = request.POST.get("voice", "")
+    message_id = request.POST.get("message_id", "").strip()
+
+    try:
+        generator = services.stream_synthesize_speech(text, voice=voice)
+        # Prime the generator: if the API call setup fails (ConfigurationError,
+        # APIError), we catch it here before StreamingHttpResponse begins.
+        # The first yield / exception happens on the first next() call.
+        first_chunk = next(generator)
+
+        def _stream_with_first():
+            """Yield the pre-fetched first chunk, then the rest."""
+            yield first_chunk
+            yield from generator
+
+        response = StreamingHttpResponse(
+            _stream_with_first(),
+            content_type="audio/mpeg",
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response
+
+    except services.ConfigurationError:
+        return JsonResponse({"error": "语音服务未配置"}, status=503)
+    except services.APIError as exc:
+        logger.error("TTS stream API error: %s", exc)
+        AudioSynthesisLog.objects.create(
+            user=request.user,
+            text=text,
+            model=services.DEFAULT_TTS_MODEL,
+            voice=voice,
+            status=AudioSynthesisLog.Status.FAILED,
+            error_message=str(exc)[:500],
+        )
+        return JsonResponse({"error": "语音合成失败"}, status=502)
+    except Exception:
+        logger.exception("TTS stream unexpected error")
+        return JsonResponse({"error": "语音合成失败"}, status=502)
 
 
 # ═══════════════════════════════════════════════════════════════

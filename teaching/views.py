@@ -27,7 +27,7 @@ logger = logging.getLogger("dbt_platform.teaching")
 @profile_required
 def teaching_home_view(request: HttpRequest) -> HttpResponse:
     """Teaching entry point — shows profile info and session history."""
-    profile = request.user.profile
+    profile = getattr(request.user, "profile", None)
     recent_sessions = TeachingSession.objects.filter(
         user=request.user
     ).order_by("-started_at")[:10]
@@ -73,12 +73,33 @@ def session_view(request: HttpRequest, session_id: str) -> HttpResponse:
                 "inquiry_focus": "近期状态",
             }
 
+    # Generate AI opening message when first entering the teaching phase
+    if not is_terminal and session.phase == TeachingSession.Phase.TEACHING and not conversation:
+        try:
+            services._generate_opening_message(session, request.user, getattr(request.user, "profile", None))
+            conversation = services.get_conversation_history(session)
+        except (ConfigurationError, APIError) as exc:
+            logger.error("Opening message generation failed for session %s: %s",
+                         session.session_id, exc)
+
+    # Fetch test records for this session
+    tests = []
+    if is_terminal:
+        from testing.models import Test, TestQuestion
+        tests = list(
+            Test.objects.filter(session=session).order_by("created_at")
+        )
+        # Annotate each test with its question count for the template
+        for t in tests:
+            t._question_count = TestQuestion.objects.filter(test=t).count()
+
     return render(request, "teaching/session.html", {
         "session": session,
         "conversation": conversation,
         "is_terminal": is_terminal,
         "plan_steps": session.teaching_plan.get("plan_steps", []) if session.teaching_plan else [],
         "inquiry_data": inquiry_data,
+        "tests": tests,
     })
 
 

@@ -51,7 +51,7 @@ DBT/
 ├── logs/                  # Application log files
 │
 ├── docker/                # Deployment configs
-│   ├── nginx.conf         # Reverse proxy, listens :443 (maps to host :10443)
+│   ├── nginx.conf         # Reverse proxy, :443 HTTP/2 (maps to host :10443)
 │   ├── mongo-init.js      # Creates dbt_app user on first MongoDB start
 │   └── certs/             # SSL certificates (mounted into Nginx)
 │
@@ -112,6 +112,7 @@ Configuration variables that MUST change for production:
 - Serializer: JSON
 - Time limit: 30 minutes per task
 - Expected async workloads: document chunking/embedding, image generation, TTS synthesis, batch export
+- **Gunicorn timeout**: Increased from default 30s to 120s (2026-05-13) — matches `API_TIMEOUT_SECONDS` in media_app/services.py, allowing synchronous image generation fallback to complete without worker kill
 
 ### 7. RAG Architecture (to be implemented in later steps)
 - **MongoDB text index**: keyword search on skill names, module names, rule documents
@@ -134,7 +135,7 @@ User Login → Pre-Mood Recording → Personal Inquiry (AI asks about recent exp
   → Auto-Transition to Test → Test Generation (AI + RAG) → Per-Question Answer + Explanation
   → Test Result → Retest or Pass → Post-Mood Recording → Achievement Check → Save All Records
 ```
-Risk detection (keyword + AI semantic) runs during teaching and testing. If triggered, session stops immediately.
+Risk detection (keyword + AI semantic) runs during teaching and testing. A `should_assess_risk()` gate (Step 14) skips the AI call for benign text — only keyword matches or moderate concern indicators trigger the full LLM assessment. If risk confirmed by either channel, session stops immediately.
 
 The **personal inquiry** phase (added 2026-05-12) is a key design element: before recommending a DBT skill, the AI first asks the student a warm, empathetic question about their recent experiences. The student's personal context then becomes the most important input for skill recommendation, combined with questionnaire data, teaching history, and test performance.
 
@@ -999,6 +1000,8 @@ session.html
 
 **HTMX indicator transitions** (`base.html`): Smooth opacity fade-in/fade-out (`.2s ease-in`) on `.htmx-indicator` elements via CSS transitions instead of instant show/hide.
 
+**HTMX CSRF header** (`base.html`, 2026-05-13): `<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"'>` ensures all `hx-post` requests automatically include the Django CSRF token. This eliminates the need for `{% csrf_token %}` inside individual `<form>` tags for HTMX-driven buttons.
+
 **Image lazy loading** (existing, verified): All `<img>` tags in `messages_partial.html` and `session.html` use `loading="lazy"` to defer off-screen image loading.
 
 **`templates/teaching/messages_partial.html`** — HTMX partial template. Renders all `conversation` messages with role-based styling. When `is_terminal=True`, shows a "会话已中止" banner. Used exclusively by `send_message_view` as an HTMX response.
@@ -1074,14 +1077,29 @@ class ViewTestMixin:
 
 The pre_mood endpoint was added because skill selection is no longer triggered from `start_session_view`. The flow is: start → session page (pre_mood UI) → pre_mood POST → (info_collection + skill_selection auto-run) → session page (skill_selection UI) → confirm_skill POST → (rag_retrieval + teaching_plan) → session page (teaching UI).
 
+### 47b. Session Page Test Records Integration (Step 15)
+
+`session_view` now queries all `Test` records for the current session when the session is in a terminal state, and passes them to the template as `tests`. The template renders a "测试记录" section below the terminal state card, showing each test as a color-coded card:
+
+- **Green** (passed, ≥4/5): score + "查看详情" link
+- **Yellow** (failed, <4/5): score + "查看详情" + "重新测试" button
+- **Blue** (ongoing with questions): "继续答题" link
+- **Blue** (ongoing, 0 questions — orphan): "继续答题" link → leads to stuck test page with recovery options
+- **Gray** (user_terminated): status only
+
+The `_question_count` annotation on each test object is available for the template but not currently rendered (reserved for future use, e.g. showing "3/5 answered").
+
+This integration closes the gap between teaching and testing — students can see all their test attempts directly on the session page without navigating to individual test URLs.
+
 ### 48. Testing Module Structure (Step 8)
 
 ```
 testing/
 ├── models.py               # Test + TestQuestion models (TestQuestion has created_at, Meta ordering)
 ├── services.py             # Orchestration layer — lazy imports for mock compatibility
-├── views.py                # 6 view functions — all @profile_required
-├── urls.py                 # 6 URL patterns
+├── tasks.py                # Celery tasks: async question generation + image generation
+├── views.py                # 8 view functions — all @profile_required
+├── urls.py                 # 8 URL patterns
 ├── admin.py                # TestAdmin + TestQuestionAdmin + TestQuestionInline
 ├── tests.py                # 60 tests in 11 classes
 ├── templatetags/
@@ -1094,15 +1112,23 @@ testing/
 
 **`testing/services.py`** — Orchestration layer (327 lines, 15 functions). All RAG chain imports are lazy (`from knowledge_base.rag.chains import ...` inside function bodies) so that `unittest.mock.patch` at the module level can intercept them. Module-level imports create local references that patches cannot reach.
 
-**`testing/views.py`** — 6 view functions implementing the full test lifecycle:
-1. `start_test_view` — creates test from completed session
-2. `test_view` — renders main test page (4 states: ongoing/completed/terminated + review)
-3. `answer_question_view` — HTMX endpoint for per-question answer + explanation
-4. `finish_test_view` — calculates pass/fail (≥4/5 threshold)
-5. `retest_view` — creates new test with incremented attempt_no
-6. `terminate_test_view` — user-initiated termination
+**`testing/tasks.py`** — Two Celery tasks (added Step 8 async, 2026-05-13):
+- `generate_test_questions_async(test_id)`: Calls `generate_and_save_questions()` via RAG + LLM, then auto-dispatches image generation for questions with `image_prompt` using **staggered countdown** (0s, 3s, 6s, 9s, 12s) to avoid MiniMax API rate-limiting. Max retries=2, delay=10s.
+- `generate_test_question_image_async(question_id)`: Calls MiniMax `image-01` API via `media_app.services.generate_image()`, writes `temporary_image_url` + `image_model` + `image_generated_at` to TestQuestion. Max retries=2, delay=30s. The underlying `generate_image()` has its own internal retry (max 3, 2s base delay) for transient HTTP errors (429/502/503/529), so Celery retries only trigger on persistent failures.
+
+**`testing/views.py`** — 8 view functions implementing the full test lifecycle:
+1. `start_test_view` — creates test from completed session, dispatches Celery question generation
+2. `test_view` — renders main test page (5 states: ongoing/completed/terminated + review + stuck). Orphan detection: if test is ongoing with 0 questions and created >5 min ago, marks as `is_stuck` and shows recovery options instead of infinite spinner (Step 15)
+3. `poll_questions_view` — HTMX polling endpoint (checks if questions ≥ 5 are ready)
+4. `answer_question_view` — HTMX endpoint for per-question answer + explanation
+5. `finish_test_view` — calculates pass/fail (≥4/5 threshold)
+6. `retest_view` — creates new test with incremented attempt_no
+7. `generate_question_image_view` — POST, dispatches Celery image task, returns polling spinner (added 2026-05-13)
+8. `question_image_status_view` — GET, returns image HTML when ready or polling spinner (added 2026-05-13)
 
 All views use `@profile_required` and ownership checks via `services.get_test_or_404(test_id, user)`.
+
+**Orphan test recovery (Step 15)**: `test_view` detects orphan tests (`is_ongoing + 0 questions + created > 5min ago`) and passes `is_stuck` context flag to template. The template shows "题目生成超时" with retry/back buttons instead of the infinite HTMX polling spinner. The `get_retest_attempt_no()` function uses `count() + 1` (not `max(attempt_no) + 1`) to avoid duplicate attempt_no from historical orphans.
 
 ### 49. Answer Letter-to-Index Mapping (Step 8)
 
@@ -1242,7 +1268,7 @@ If failed: "重新测试" button
 - Previous test records are preserved — all attempts are traceable
 - No limit on retest count (verified: 4 cycles in `test_unlimited_retests`)
 
-### 54. TestTemplate Architecture (Step 8)
+### 54. TestTemplate Architecture (Step 8, Updated 2026-05-13)
 
 `templates/testing/test.html` renders 4 distinct states driven by `test.status`:
 
@@ -1251,7 +1277,8 @@ test.html
 ├── is_completed == True + result_data
 │   └── Result summary (pass/fail badge, correct_count/total, attempt_no)
 │       ├── "返回教学会话" link
-│       └── "重新测试" button (only if not passed)
+│       ├── "重新测试" button (only if not passed)
+│       └── Post-test mood recording prompt
 │
 ├── is_terminated == True
 │   └── "测试已终止" info + "返回教学会话" link
@@ -1261,17 +1288,49 @@ test.html
 │       └── Per question: correctness badge + question text
 │           + options with highlighting (green=correct, red=wrong answer)
 │           + explanation box
+│           + Image area (3 states):
+│               ├── temporary_image_url → <img> + model label
+│               ├── image_prompt only → "生成配图" hx-post button (async Celery)
+│               └── neither → "生成配图" hx-post button (with fallback prompt)
 │
 └── is_ongoing == True
-    ├── Progress sidebar (sticky, col-1)
-    │   ├── Per-question status (gray/✓/✗)
-    │   ├── "已答：N/5" counter
-    │   ├── "提交测试" button (when all answered)
-    │   └── "终止" button
-    └── Question area (col-4)
-        └── Current question: question_text + radio options (A/B/C/D)
-            + HTMX submit form (hx-post, hx-target="#question-area")
+    ├── total_count == 0 (loading: questions not yet generated)
+    │   └── Spinner + HTMX polling (hx-get poll endpoint, hx-trigger="load delay:1s")
+    └── total_count >= 5 (active test)
+        ├── Progress sidebar (sticky, col-1)
+        │   ├── Per-question status (gray/✓/✗)
+        │   ├── "已答：N/5" counter
+        │   ├── "提交测试" button (when all answered)
+        │   └── "终止" button
+        └── Question area (col-4)
+            └── Current question: question_text + radio options (A/B/C/D)
+                + HTMX submit form (hx-post, hx-target="#question-area")
+                + Image area (3 states):
+                    ├── temporary_image_url → <img> + sync regen button (DBT_Image.generate)
+                    ├── image_prompt only → HTMX polling spinner
+                    │     (hx-get image-status, hx-trigger="load delay:1s")
+                    │     → auto-displays image when Celery task completes
+                    └── neither → "生成配图" hx-post button
+                          → dispatches Celery task, returns polling spinner
 ```
+
+**Image area polling flow** (2026-05-13):
+
+When a question has `image_prompt` but no URL yet, the template renders:
+```html
+<div hx-get="{% url 'testing:question_image_status' question_id %}"
+     hx-trigger="load delay:1s" hx-swap="outerHTML">
+  <spinner> 情景配图自动生成中... </spinner>
+</div>
+```
+
+The `question_image_status_view` returns either:
+- Image HTML (when `temporary_image_url` is set) → spinner replaced with `<img>`
+- Polling spinner (when still waiting) → re-polls every 3s via `hx-trigger="every 3s"`
+
+For questions without `image_prompt`, the "生成配图" button POSTs to `generate_question_image_view`, which constructs a fallback prompt from the question text, saves it, dispatches the Celery task, and returns the polling spinner.
+
+**CSRF header** (2026-05-13): `<body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"'>` in `base.html` ensures all HTMX POST requests carry the CSRF token without needing individual `{% csrf_token %}` tags on every button.
 
 ### 55. Teaching→Testing Integration Point (Step 8)
 
@@ -1295,7 +1354,7 @@ This appears in the completed terminal state, next to the "返回教学首页" l
 
 The session's `teaching_summary.key_points` are extracted and passed to the test question generation chain as `teaching_summary_key_points`, ensuring test questions are relevant to what was taught.
 
-### 56. Risk Detection During Testing (Step 8)
+### 56. Risk Detection During Testing (Step 8, Optimized Step 14)
 
 Risk detection runs on every test answer submission:
 
@@ -1308,7 +1367,9 @@ risk_context = _get_answer_context(test)      # last 3 answered questions
 services.process_test_risk(test, user, selected_text, risk_context)
 ```
 
-`_get_answer_context()` collects the 3 most recently answered question texts for AI context. `process_test_risk()` runs keyword check first, then AI assessment if keywords triggered. On high risk, the test is terminated (status → USER_TERMINATED) and a RiskEvent is created with `detection_source="both"` or `"keyword"`.
+`_get_answer_context()` collects the 3 most recently answered question texts for AI context. `process_test_risk()` runs keyword check first. **As of Step 14**, a `should_assess_risk()` gate skips the MiniMax LLM call when the text contains no risk keywords or moderate concern indicators — the vast majority of benign test answers return in milliseconds. Only text matching keyword lists or concern indicators triggers the full AI semantic assessment.
+
+On high risk, the test is terminated (status → USER_TERMINATED) and a RiskEvent is created with `detection_source="both"` or `"keyword"`.
 
 ### 57. Test Question Ordering Invariant
 
@@ -1664,14 +1725,14 @@ Section 56 (Risk Detection During Testing, Step 8) previously stated that AI ass
 
 ### 73. media_app — File Structure and Responsibilities (Step 11)
 
-`media_app/` is a dedicated Django app for MiniMax image generation, TTS, and ASR. It is separate from teaching/testing to avoid circular imports — image/TTS/ASR are cross-cutting services consumed by both teaching and testing flows:
+`media_app/` is a dedicated Django app for image generation (MiniMax), TTS (Volcengine 豆包语音合成模型2.0), and ASR (Volcengine). It is separate from teaching/testing to avoid circular imports — image/TTS/ASR are cross-cutting services consumed by both teaching and testing flows:
 
 ```
 media_app/
 ├── __init__.py
 ├── apps.py              # MediaAppConfig (AppConfig)
 ├── models.py            # 3 metadata log models (no binary file storage)
-├── services.py           # MiniMax API clients (image, TTS, ASR)
+├── services.py           # Image (MiniMax) + TTS/ASR (Volcengine) API clients
 ├── views.py              # 3 endpoints returning HTMX/audio/JSON
 ├── urls.py               # Namespace "media", 3 URL patterns
 ├── admin.py              # 3 read-only admin classes
@@ -1680,45 +1741,64 @@ media_app/
     └── 0001_initial.py   # Applied with --fake (MongoDB)
 ```
 
-**API key sharing**: All 3 services read `MINIMAX_API_KEY` and `MINIMAX_BASE_URL` from `settings.MINIMAX_API_KEY` / `settings.MINIMAX_BASE_URL` (set via `.env`). Same pattern as `knowledge_base/rag/llm_client.py`.
+**API key sharing**: Image generation uses `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`. TTS and ASR share `VOLCENGINE_API_KEY` (set via `.env`). TTS additionally requires `VOLCENGINE_TTS_APP_ID` and `VOLCENGINE_TTS_CLUSTER` from the same volcengine speech app.
 
 **Error model**: `ConfigurationError(Exception)` for missing API keys; `APIError(Exception)` for non-200 status, timeout, and connection errors. Views catch both and return user-facing messages without crashing the session.
 
-### 74. Image Generation — Service and Data Flow (Step 11, Optimized Step 13)
+### 74. Image Generation — Service and Data Flow (Step 11, Updated 2026-05-14)
 
-**Service**: `media_app/services.py::generate_image(prompt, model="image-01-live", n=1, size="1024x1024")`
+**Service**: `media_app/services.py::generate_image(prompt, model="image-01", n=1, aspect_ratio="1:1")`
 
-**Default model** (`DEFAULT_IMAGE_MODEL`): Changed from `"image-01"` to `"image-01-live"` (2026-05-11) — the `-live` variant is optimized for real-time interactive scenarios with lower latency.
+**Default model** (`DEFAULT_IMAGE_MODEL`): `"image-01"` (corrected from `"image-01-live"` on 2026-05-13 — the user's Token Plan Hs_plus has 0 quota for `image-01-live`).
 
 Calls `POST {MINIMAX_BASE_URL}/v1/image/generation` with Bearer token auth and JSON body:
 ```python
-{"model": "image-01-live", "prompt": prompt, "n": n, "size": size}
+{"model": "image-01", "prompt": prompt, "n": n, "aspect_ratio": aspect_ratio, "prompt_optimizer": True}
 ```
+
+`aspect_ratio` replaces former `size` parameter (MiniMax API uses `aspect_ratio`, not `size`). `prompt_optimizer: True` enables server-side prompt enhancement for better image quality.
 
 Returns `{"urls": [...], "model": "...", "usage": {...}}`. View extracts `urls[0]` as the temporary image URL.
 
 **Two integration points**:
 
-1. **Teaching scene** — Button `🎨 生成教学配图` in teaching sidebar (`session.html:232`). JS `DBT_Image.generate()` POSTs to `/media/image/generate/` with `source="teaching_scene"` and `session_id`. View returns HTMX fragment (`<img src="...">`) rendered into `#teaching-image-area`.
+1. **Teaching scene** — Button `🎨 生成教学配图` in teaching sidebar. JS `DBT_Image.generate()` POSTs to `/media/image/generate/` with `source="teaching_scene"` and `session_id`. View returns HTMX fragment (`<img src="...">`) rendered into `#teaching-image-area`.
 
-2. **Test question illustration** — Button `🎨 生成配图` on test question page (`test.html`). JS POSTs with `source="test_illustration"` and `test_question_id`. View updates `TestQuestion` fields (`temporary_image_url`, `image_prompt`, `image_model`, `image_generated_at`) so the image persists across page reloads for that question.
+2. **Test question illustration** — Two paths:
+   - **Auto (Celery, staggered Step 14)**: `generate_test_questions_async` dispatches `generate_test_question_image_async` for questions with `image_prompt` using `apply_async(countdown=i*3)` to space requests 3s apart. Image URL saved to `TestQuestion.temporary_image_url`. Frontend polls `question_image_status_view` every 3s until ready.
+   - **Manual (async)**: "生成配图" button POSTs to `/testing/question/<id>/generate-image/`, which dispatches Celery task and returns polling spinner. For questions without `image_prompt`, a fallback prompt is constructed from question text.
+   - **Internal retry (Step 14)**: `generate_image()` in `media_app/services.py` retries transient HTTP errors (429, 502, 503, 529) with exponential backoff (2s → 4s → 8s, max 3 retries) before the Celery-level retry (30s delay) is triggered.
+   - **Manual (sync, regen)**: "🔄 重新生成配图" on existing images calls `DBT_Image.generate()` → synchronous `/media/image/generate/` (viable with 120s gunicorn timeout).
 
-**Data flow**:
+**Data flow** (async path):
+```
+Browser: hx-post to /testing/question/<id>/generate-image/
+  → testing.views.generate_question_image_view
+  → generate_test_question_image_async.delay(question_id)    # fire-and-forget via Redis
+  → Celery worker picks up task
+  → media_app.services.generate_image(prompt)
+  → MiniMax API POST /v1/image/generation
+  → TestQuestion.temporary_image_url updated in DB
+  → Browser polls /testing/question/<id>/image-status/ every 3s
+  → Image <img> returned when URL is set
+```
+
+**Data flow** (sync path, for regen):
 ```
 Browser JS (DBT_Image.generate)
   → POST /media/image/generate/ (HTMX, X-Requested-With)
   → media_app.views.generate_image_view
   → media_app.services.generate_image(prompt)
   → MiniMax API POST /v1/image/generation
-  → ImageGenerationLog.objects.create(status="success", prompt, model, temporary_image_url, source, session/test_question)
+  → ImageGenerationLog.objects.create(status="success", ...)
   → Returns HTMX fragment: <img src="..." class="...">
 ```
 
-**PRD compliance**: Image files are NOT persisted. Only the temporary CDN URL (which expires) is stored in `ImageGenerationLog.temporary_image_url`. The log preserves prompt, model, status, and timestamp for audit.
+**PRD compliance**: Image files are NOT persisted. Only the temporary CDN URL (which expires) is stored in `ImageGenerationLog.temporary_image_url` and `TestQuestion.temporary_image_url`. The log preserves prompt, model, status, and timestamp for audit.
 
-### 74b. Async Image Generation via Celery (Step 13 Optimization)
+### 74b. Async Image Generation via Celery (Updated 2026-05-14)
 
-Teaching auto-generated images (from `image_prompt` in AI responses) are now dispatched to Celery instead of raw daemon threads:
+**Teaching auto-generated images** (from `image_prompt` in AI responses):
 
 ```
 generate_teaching_content() returns image_prompt
@@ -1730,25 +1810,51 @@ generate_teaching_content() returns image_prompt
   → ChatMessage.image_url updated directly in DB
 ```
 
-**Task**: `media_app/tasks.py::generate_image_async` — `@shared_task(bind=True, max_retries=2, default_retry_delay=10)`. On failure, auto-retries twice. On success, writes `image_url` to the latest assistant ChatMessage in the session.
+**Test question images** (auto + manual):
 
-**Why Celery over threading.Thread**:
+```
+Path A — Auto (on test creation):
+  generate_test_questions_async(test_id)
+    → generate_and_save_questions(test, user, session)
+    → LLM returns image_prompt per question → saved to TestQuestion.image_prompt
+    → for each question with image_prompt:
+        generate_test_question_image_async.delay(question_id)
+    → Celery worker: generate_image(prompt) → write temporary_image_url to TestQuestion
+    → Frontend: HTMX polls /testing/question/<id>/image-status/ every 3s
+    → Image auto-displays when ready
+
+Path B — Manual (user clicks "生成配图"):
+  hx-post /testing/question/<id>/generate-image/
+    → if no image_prompt: construct fallback from question text, save
+    → generate_test_question_image_async.delay(question_id)
+    → return polling spinner → auto-display when ready
+```
+
+**Tasks**:
+- `media_app/tasks.py::generate_image_async` — `@shared_task(bind=True, max_retries=2, default_retry_delay=10)`. Writes `image_url` to latest assistant ChatMessage.
+- `testing/tasks.py::generate_test_questions_async` — `@shared_task(bind=True, max_retries=2, default_retry_delay=10)`. Generates 5 questions, dispatches image tasks with staggered countdown (0s, 3s, 6s, 9s, 12s) via `apply_async(countdown=i*3)`.
+- `testing/tasks.py::generate_test_question_image_async` — `@shared_task(bind=True, max_retries=2, default_retry_delay=30)`. Writes `temporary_image_url`, `image_model`, `image_generated_at` to TestQuestion. Underlying `generate_image()` has its own internal retry for transient HTTP errors (429/502/503/529), so the 30s Celery retry only fires on persistent failures.
+
+**Why Celery over synchronous API calls**:
 - Survives gunicorn worker restarts (task re-queued by Redis broker)
-- Doesn't compete for gunicorn worker CPU during image API call (~3-8s)
+- Doesn't block gunicorn workers during image API call (~25s)
 - Retry logic is declarative via decorator parameters
 - Task visible in Celery monitoring (Flower or `celery inspect`)
+- Frontend polls independently — user can continue answering questions while images generate
 
 ### 75. TTS Service with Auto-Play Toggle Architecture (Step 11)
 
-**Service**: `media_app/services.py::synthesize_speech(text, model="speech-2.8-turbo", voice="", speed=1.0, vol=1.0, return_audio_bytes=True)`
+**Provider**: Volcengine (火山引擎) 豆包语音合成模型2.0 (migrated from MiniMax, 2026-05-12).
 
-Calls `POST {MINIMAX_BASE_URL}/v1/t2a_v2` with JSON body including `text`, `model`, `voice_setting`, `audio_setting` (speed, vol, format). When `return_audio_bytes=True`, downloads the audio from the returned URL and returns raw bytes. When `False`, returns the audio URL directly (fallback path).
+**Service**: `media_app/services.py::synthesize_speech(text, model="volcengine-tts", voice="", speed=1.0, vol=1.0, return_audio_bytes=True)`
+
+Calls `POST https://openspeech.bytedance.com/api/v1/tts` with `Authorization: Bearer;{VOLCENGINE_API_KEY}` header and JSON body including `app.appid`, `app.token`, `app.cluster`, `audio.voice_type`, `audio.encoding`, `audio.rate`, `audio.speed_ratio`, `audio.volume_ratio`, `request.text`, `request.reqid`. Text is limited to 3000 chars (first) then trimmed to 1000 UTF-8 bytes to comply with volcengine's 1024-byte limit. Audio is returned as base64 in the response `data` field, decoded to bytes in-memory.
 
 **View**: `media_app/views.py::synthesize_speech_view` — Two response modes:
-- **Binary mode** (default): Returns `audio/mpeg` binary via `HttpResponse(audio_bytes, content_type="audio/mpeg")`. Audio is proxied through Django; browser never sees the MiniMax CDN URL.
-- **JSON fallback**: Returns `{"audio_url": "...", "message_id": "..."}` when binary download fails.
+- **Binary mode** (default): Returns `audio/mpeg` binary via `HttpResponse(audio_bytes, content_type="audio/mpeg")`. Audio is proxied through Django.
+- **JSON fallback**: Returns `{"audio_url": "...", "message_id": "..."}` when binary data is unavailable.
 
-Text is truncated to 3000 characters before API call (MiniMax TTS limit).
+Text is truncated to 3000 characters, then further trimmed to 1000 UTF-8 bytes before the API call (volcengine TTS V1 limit).
 
 **Auto-play architecture** — Dual-mode playback:
 
@@ -1782,7 +1888,7 @@ HTMX swap → autoPlayLatest() reads localStorage → plays or skips
 
 **Service**: `media_app/services.py::transcribe_audio(audio_bytes, audio_format="wav", model="")`
 
-Calls `POST {MINIMAX_BASE_URL}/v1/audio/transcription` with multipart file upload (audio file + model). Returns `{"transcribed_text": "...", "model": "...", "usage": {...}}`.
+Calls volcengine ASR API via submit/poll pattern (same `https://openspeech.bytedance.com` platform as TTS). Returns `{"transcribed_text": "...", "model": "volcengine-bigasr", "usage": {...}}`.
 
 **Recording flow** (client-side MediaRecorder API):
 ```
@@ -1795,7 +1901,7 @@ User clicks 🎤 (mic button in chat input)
   → DBT_ASR.stop() → MediaRecorder.onstop
   → Fetch POST /media/asr/transcribe/ with audio Blob (FormData)
   → services.transcribe_audio(audio_bytes, format="webm")
-  → MiniMax API POST /v1/audio/transcription
+  → Volcengine API POST submit + poll query
   → AudioTranscriptionLog created (transcribed_text, audio_duration_ms)
   → Response: {"success": true, "text": "transcribed text"}
   → JS fills chat input (asr-result element); user reviews before sending
@@ -1807,7 +1913,7 @@ User clicks 🎤 (mic button in chat input)
 
 **PRD compliance**: Raw audio bytes are processed in memory and discarded after transcription. Only `transcribed_text`, `model`, and `audio_duration_ms` are persisted in `AudioTranscriptionLog`.
 
-**Fallback structure**: Error messages reference volcengine (火山引擎) as fallback ASR provider when MiniMax ASR returns an error, providing a clear path for future multi-provider support.
+**Fallback structure**: ASR uses volcengine (火山引擎) as the primary provider. TTS also uses volcengine (豆包语音合成模型2.0), sharing the same platform and API key. Error messages reference volcengine for both services.
 
 ### 77. Frontend JavaScript Architecture (Step 11)
 
@@ -1898,7 +2004,7 @@ Three metadata log models — all use `gen_uuid()` for primary keys and `db_tabl
 | Field | Type | Purpose |
 |-------|------|---------|
 | `text` | TextField | Text sent to TTS |
-| `model` | CharField(50) | MiniMax model (speech-2.8-turbo) |
+| `model` | CharField(50) | TTS model label (volcengine-tts) |
 | `voice` | CharField(50) | Voice ID |
 | `temporary_audio_url` | URLField(500) | CDN URL (only when binary download fails) |
 | `status` | CharField(20) | success / error |
@@ -2309,3 +2415,260 @@ Three production bugs discovered after deploying the streaming optimization:
   1. **Prompt**: Added explicit markdown prohibition + natural paragraph formatting rules to `_STREAMING_TEACHING_SYSTEM`
   2. **Frontend**: `_escapeHtml()` helper + `innerHTML` rendering with `\n` → `<br>` conversion; raw text preserved for TTS playback
 - Design note: `innerHTML` is used only for LLM-generated content (trusted source); the `_escapeHtml()` helper still prevents any accidental HTML injection via `createTextNode` → `innerHTML` pattern
+
+---
+
+### §100 HTTP/2 TTS 500 Bug — Nginx HTTP/2 Module Regression (2026-05-13)
+
+**Symptom**: First TTS request after browser page refresh returned HTTP 500 with 141-byte nginx default error body. Subsequent requests succeeded. Only occurred over HTTP/2; HTTP/1.1 requests always worked. Nginx error log was empty (0 bytes) during these failures — the error was generated at the HTTP/2 module level without triggering traditional error logging.
+
+**Root cause**: nginx 1.27.5's **deprecated `listen 443 ssl http2;` syntax** caused the HTTP/2 module to intermittently reject POST requests to `/media/tts/synthesize/`. The `http2` parameter on the `listen` directive was deprecated by nginx — the correct modern syntax is `listen 443 ssl;` + `http2 on;` as a separate directive. When using the deprecated form, nginx's HTTP/2 stream multiplexing would reject the first request on a new connection's stream, returning 500 without ever proxying the request to Django or writing any log entry.
+
+**Why "first request after refresh"**: HTTP/2 multiplexes all requests over a single TCP connection. A page refresh tears down the old connection and establishes a new one. The first TTS request on the new HTTP/2 connection triggered the module-level bug. After the connection stabilised, subsequent requests on the same multiplexed stream succeeded — until the next refresh.
+
+**Diagnostic process**:
+1. Added `logger.info()` at `synthesize_speech_view` entry — confirmed Django never received the 500-failing requests
+2. Direct HTTP request from nginx container to Django (`curl http://web:8000/media/tts/synthesize/`) — 200 OK, confirmed Django-side code works
+3. Disabled HTTP/2 entirely (`listen 443 ssl;` without http2) — TTS worked, confirmed HTTP/2-specific
+4. Re-enabled HTTP/2 with corrected `http2 on;` syntax — TTS worked, confirmed the deprecated `listen ... http2` syntax was the root cause
+
+**Fix** (2-part in `docker/nginx.conf`):
+
+1. **Correct HTTP/2 directive**: `listen 443 ssl;` + `http2 on;` (separate directives) instead of deprecated `listen 443 ssl http2;`
+2. **Dedicated TTS location** with streaming-compatible proxy settings matching the working SSE endpoint:
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    ...
+
+    # TTS endpoint — streaming settings for HTTP/2 compatibility
+    location /media/tts/ {
+        proxy_pass http://web:8000/media/tts/;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 120s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+    }
+}
+```
+
+**Key settings rationale**:
+- `proxy_http_version 1.1` — required for HTTP/2-to-upstream proxying; the default HTTP/1.0 can cause issues with HTTP/2 multiplexing
+- `proxy_buffering off` — prevents nginx from buffering the large TTS audio response (599KB+) to temporary files before forwarding
+- `proxy_cache off` / `gzip off` — ensures raw binary audio passes through unmodified
+- `proxy_set_header Connection ""` — clears the Connection header so nginx can manage keep-alive independently between client (HTTP/2) and upstream (HTTP/1.1)
+- `proxy_read_timeout 120s` — matches the TTS API call timeout; volcengine TTS can take 5-10 seconds per synthesis
+
+**Why the SSE location settings work for TTS**: Both SSE streaming and TTS involve relatively long-lived responses (5-14s for SSE, 5-10s for TTS audio) where the client needs to consume data as it arrives. In both cases, `proxy_buffering off` prevents nginx from holding the entire response before forwarding. For HTTP/2 connections, `proxy_http_version 1.1` is essential because HTTP/2 multiplexing requires the proxy to negotiate HTTP/1.1 with the upstream.
+
+**Prevention**:
+- Always use `http2 on;` directive, never `listen ... http2` parameter (deprecated since nginx 1.25)
+- TTS/large-binary endpoints need `proxy_buffering off` and `proxy_http_version 1.1` for HTTP/2 compatibility
+- Bind-mount config changes require nginx container **restart** (not reload) to guarantee propagation — `docker compose restart nginx`
+
+---
+
+### §101 TTS 双层缓存架构 (2026-05-13)
+
+TTS 加载慢的根因是三重串行延迟：TTS API 合成时间 + 全部音频传输到服务器 + 全部音频传输到浏览器。每次播放都是全新的 API 调用，同一段文字被反复合成。
+
+**双层缓存方案** — 服务端 Redis + 前端 Blob URL 互补：
+
+```
+用户点击 🔊 / 自动播报触发
+  → DBT_TTS.play(text, messageId)
+    ├── [Layer 1: Blob Cache] 检查 _blobCache.has(messageId)
+    │     ├── HIT → _playAudioBlob(cached.blob, msgId, cached.url) ← 零网络请求
+    │     └── MISS ↓
+    ├── [Network] POST /media/tts/synthesize/
+    │     ├── [Layer 2: Redis Cache] synthesize_speech() 检查 Redis
+    │     │     ├── HIT → 直接返回 cached audio_bytes ← 跳过 API 调用
+    │     │     └── MISS → 调用火山引擎 TTS API → 合成完成 → 写入 Redis
+    │     └── 返回 audio/mpeg 响应
+    └── 收到 Blob → 写入 _blobCache → _playAudioBlob()
+```
+
+**Layer 1 — 前端 Blob URL 缓存** (`static/js/media.js`):
+
+| 属性 | 值 |
+|------|-----|
+| 存储位置 | `_blobCache` (Map)，浏览器内存 |
+| Key | `messageId` (ChatMessage UUID) |
+| Value | `{blob: Blob, url: string}` (Blob + createObjectURL) |
+| 上限 | 20 条 (`BLOB_CACHE_MAX`) |
+| 驱逐策略 | FIFO — 满时删除最旧条目，`URL.revokeObjectURL()` 释放 |
+| 生命周期 | 页面内（刷新后重建） |
+| 命中效果 | 零网络请求，即时播放 |
+
+缓存 URL 不释放（onended 检查 `isUrlFromCache`），由缓存持有所有权直到被驱逐。
+
+**Layer 2 — 服务端 Redis 缓存** (`media_app/services.py`):
+
+| 属性 | 值 |
+|------|-----|
+| 存储位置 | Redis (同一实例，共享 Celery broker / RAG cache) |
+| Key | `tts:audio:<sha256(text|voice)>` (前 16 hex chars) |
+| Value | 原始 audio_bytes (MP3 binary) |
+| TTL | 3600 秒 (1 小时) |
+| 命中效果 | 跳过火山引擎 API 调用 (节省 5-15 秒) |
+
+**缓存的 4 个辅助函数**:
+- `_get_redis()` — 惰性连接，socket timeout 2s，不可用时返回 None (与 `knowledge_base/services.py` 相同模式)
+- `_tts_cache_key(text, voice)` — `sha256(f"{text}|{voice}".encode()).hexdigest()[:16]`，前缀 `tts:audio:`
+- `_tts_cache_get(text, voice)` — `client.get(key)`，返回 bytes 或 None
+- `_tts_cache_set(text, voice, audio)` — `client.setex(key, TTL, audio)`
+
+**synthesize_speech() 修改点**:
+1. **API 调用前** (line ~253): `if return_audio_bytes: cached = _tts_cache_get(text, speaker); if cached: return {...}`
+2. **合成完成后** (line ~348): `if return_audio_bytes: _tts_cache_set(text, speaker, audio_bytes)`
+
+**容错设计**:
+- Redis 不可用 → `_get_redis()` 返回 None → `_tts_cache_get/set` 均为 no-op → 正常走 API
+- 前端 Map 满 → 驱逐最旧 + 释放 URL → 无内存泄漏
+- Cache key 包含 voice → 不同音色独立缓存
+- 现有测试无需修改 (测试 mock `requests.post`，缓存层透明)
+
+**与已有 Redis 模式的关系**: 本缓存复用了 `knowledge_base/services.py` 中已建立的 Redis 客户端模式 (惰性连接 + graceful degradation)。TTS cache key 使用 `tts:audio:` 前缀，与 RAG cache key (`rag:search:`) 在同一 Redis 实例中共存，互不干扰。
+
+---
+
+### §102 TTS 流式音频传输架构 (2026-05-13)
+
+TTS 首次播放延迟的根本原因是"全部缓冲再返回"模式：火山引擎 TTS API 本身支持流式传输（每个 JSON Line 包含一段 base64 MP3 音频），但之前的 `synthesize_speech()` 收集完全部 chunk 的 `b"".join(audio_chunks)` 后才返回。这意味着浏览器必须等待 **完整 API 合成 + 全部数据传输** 才能开始播放。
+
+**流式方案** — 利用 HTTP chunked transfer encoding + MediaSource API 实现边合成边播放：
+
+```
+火山引擎 TTS API (stream=True)
+  → JSON Lines: {"code":0, "data":"<base64 mp3>"}
+  → base64 decode → yield raw MP3 bytes (generator)
+    → Django StreamingHttpResponse (Transfer-Encoding: chunked)
+      → Nginx (proxy_buffering off, proxy_http_version 1.1)
+        → Browser ReadableStream reader
+          → MediaSource SourceBuffer('audio/mpeg', mode='sequence')
+            → <audio> element — 首 chunk 到达即开始解码播放
+```
+
+**后端 — `stream_synthesize_speech()` 生成器** (`media_app/services.py`):
+
+```python
+def stream_synthesize_speech(text, *, voice="", speed=1.0, vol=1.0):
+    # 1. Redis cache check — hit: yield cached bytes in 16KB chunks
+    cached = _tts_cache_get(text, speaker)
+    if cached is not None:
+        for i in range(0, len(cached), 16384):
+            yield cached[i:i + 16384]
+        return
+
+    # 2. Call Volcengine TTS V3 with stream=True
+    resp = requests.post(url, json=body, headers=headers, stream=True)
+
+    # 3. Iterate JSON Lines, yield each decoded audio chunk immediately
+    all_audio = []
+    for line in resp.iter_lines(decode_unicode=True):
+        chunk = json.loads(line)
+        if chunk["code"] == 0 and chunk.get("data"):
+            audio_chunk = base64.b64decode(chunk["data"])
+            all_audio.append(audio_chunk)
+            yield audio_chunk  # ← 浏览器立即收到此 chunk
+        elif chunk["code"] == 20000000:
+            success = True
+
+    # 4. Cache for future requests (after streaming completes)
+    _tts_cache_set(text, speaker, b"".join(all_audio))
+```
+
+**视图 — `stream_speech_view`** (`media_app/views.py`):
+
+使用 "prime generator" 模式在返回 StreamingHttpResponse 前捕获 pre-flight 错误：
+
+```python
+generator = services.stream_synthesize_speech(text, voice=voice)
+first_chunk = next(generator)  # 可能抛出 ConfigurationError / APIError
+
+def _stream_with_first():
+    yield first_chunk
+    yield from generator
+
+response = StreamingHttpResponse(_stream_with_first(), content_type="audio/mpeg")
+response["X-Accel-Buffering"] = "no"
+```
+
+**前端 — `_playAudioStream()`** (`static/js/media.js`):
+
+| 步骤 | 操作 |
+|------|------|
+| 1 | 检查 `window.MediaSource` 支持，不支持则降级 |
+| 2 | `new MediaSource()` → `URL.createObjectURL(mediaSource)` → `new Audio(url)` |
+| 3 | `audio.play()` 等待数据 |
+| 4 | `sourceopen` 事件 → `mediaSource.addSourceBuffer('audio/mpeg')` → `mode='sequence'` |
+| 5 | `fetch('/media/tts/stream/', {method:'POST', body:formData})` |
+| 6 | `ReadableStream.getReader().read()` 循环读取 chunk |
+| 7 | 每个 chunk → `sourceBuffer.appendBuffer(chunk)`（通过 updateend 队列串行化） |
+| 8 | 流结束 → `mediaSource.endOfStream()` → 完整 Blob 写入 `_blobCache` |
+
+**SourceBuffer 队列管理** — 关键约束：
+
+SourceBuffer 不支持并发 `appendBuffer()`。在上一个 append 完成之前（`updateend` 事件前）调用会抛出 "still processing" 异常。解决方案：
+- `pendingChunks` 队列缓冲到达的 chunk
+- `appending` 标志防止并发
+- `updateend` 事件驱动 `_appendNext()` 消费队列
+- 流完成 + 队列空 + MediaSource open → `endOfStream()`
+
+**三层回退链**:
+
+```
+_playAudioStream (MediaSource streaming)
+  ├── MediaSource 不支持 → _fallbackToFetch
+  ├── addSourceBuffer 失败 → _fallbackToFetch
+  ├── fetch 错误 → _fallbackToFetch
+  ├── SourceBuffer error → _fallbackToFetch
+  ├── ReadableStream error → _fallbackToFetch
+  └── audio.play() 失败 → _fallbackToFetch
+
+_fallbackToFetch (非流式 /media/tts/synthesize/)
+  ├── 返回 audio/mpeg blob → _playAudioBlob
+  ├── 返回 audio_url JSON → _playAudioUrl
+  └── 错误 → 红色提示条 (5s 自动隐藏)
+
+_playAudioBlob (已缓存的 blob — 即时播放)
+  ├── 缓存 URL → 直接使用 (不释放)
+  └── 新 URL → 播放结束后释放
+
+后续播放 (Blob cache hit)
+  └── 零网络请求，即时播放
+```
+
+**与已有 Nginx 配置的关系**:
+
+现有的 `/media/tts/` location 已配置流式所需的全部 Nginx 指令：
+- `proxy_buffering off` — 不缓冲响应，chunk 立即转发
+- `proxy_http_version 1.1` — HTTP/2 兼容
+- `proxy_cache off` / `gzip off` — 原始二进制通过
+- `proxy_read_timeout 120s` — 匹配 TTS API 超时
+
+新增的 `/media/tts/stream/` URL 自动匹配此 location（`/media/tts/` 是前缀），无需修改 Nginx 配置。
+
+**静态文件部署注意事项**:
+- 前端 JS 更新后必须运行 `python manage.py collectstatic --noinput`
+- Nginx 的 `staticfiles/` 目录映射需要在 collectstatic 后才会更新
+- 遗漏此步骤会导致浏览器加载旧 JS，流式功能完全不生效（旧 JS 直接调用 `/media/tts/synthesize/` 非流式端点）
+
+**视图异常处理** (2026-05-13 hotfix):
+- `stream_speech_view` 在 `ConfigurationError` / `APIError` 之外新增 `except Exception` 兜底 — `logger.exception()` 记录完整 traceback，返回 502 JSON 错误，防止未预期异常导致静默 500
+
+**延迟改善估算**:
+
+| 阶段 | 之前 (全缓冲) | 之后 (流式) |
+|------|-------------|-----------|
+| API 首个 chunk 到达 | 等待中 | 浏览器开始接收 |
+| API 调用完成 | 等待中 | 浏览器已在播放 |
+| 完整音频传输到浏览器 | 现在才开始下载 | 已在播放中 |
+| 浏览器开始播放 | API时间 + 传输时间 | ~首 chunk 延迟 (0.5-1s) |

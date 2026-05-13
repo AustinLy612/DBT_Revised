@@ -18,12 +18,13 @@ import logging
 from http import HTTPStatus
 
 from django.contrib import messages
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 
 from . import services
 from .models import Test, TestQuestion
-from knowledge_base.rag.llm_client import APIError, ConfigurationError
+from .tasks import generate_test_questions_async, generate_test_question_image_async
 from questionnaire.decorators import profile_required
 from teaching.models import TeachingSession
 
@@ -40,7 +41,11 @@ _LETTER_TO_INDEX = {"A": 0, "B": 1, "C": 2, "D": 3}
 
 @profile_required
 def start_test_view(request: HttpRequest, session_id: str) -> HttpResponse:
-    """Create a new test for a completed teaching session."""
+    """Create a new test for a completed teaching session.
+
+    Creates the Test record immediately and dispatches question generation
+    to a Celery worker so the request never blocks on the LLM call.
+    """
     if request.method != "POST":
         return redirect("teaching:session", session_id=session_id)
 
@@ -51,14 +56,12 @@ def start_test_view(request: HttpRequest, session_id: str) -> HttpResponse:
         return redirect("teaching:session", session_id=session_id)
 
     attempt_no = services.get_retest_attempt_no(session)
+    test = services.create_test(session, request.user, attempt_no=attempt_no)
 
-    try:
-        test = services.create_test(session, request.user, attempt_no=attempt_no)
-    except (ConfigurationError, APIError):
-        messages.error(request, "AI 测试题生成暂时不可用，请稍后再试。")
-        return redirect("teaching:session", session_id=session_id)
+    # Dispatch async question generation via Celery
+    generate_test_questions_async.delay(test.test_id)
 
-    messages.success(request, f"已生成 5 道测试题（第 {attempt_no} 次测试）。")
+    messages.success(request, f"测试已创建，正在生成题目（第 {attempt_no} 次测试）。")
     return redirect("testing:test", test_id=test.test_id)
 
 
@@ -98,6 +101,12 @@ def test_view(request: HttpRequest, test_id: str) -> HttpResponse:
             "attempt_no": test.attempt_no,
         }
 
+    # Detect orphan tests: created > 5min ago but with 0 questions
+    from datetime import timedelta
+    from django.utils import timezone
+    is_stuck = is_ongoing and len(questions) == 0 and \
+        (timezone.now() - test.created_at) > timedelta(minutes=5)
+
     return render(request, "testing/test.html", {
         "test": test,
         "questions": questions,
@@ -108,10 +117,49 @@ def test_view(request: HttpRequest, test_id: str) -> HttpResponse:
         "is_completed": is_completed,
         "is_terminated": is_terminated,
         "is_ongoing": is_ongoing,
+        "is_stuck": is_stuck,
         "result_data": result_data,
         "option_letters": _OPTION_LETTERS,
         "session": test.session,
     })
+
+
+# ═══════════════════════════════════════════════════════════════
+# Question generation polling (HTMX)
+# ═══════════════════════════════════════════════════════════════
+
+@profile_required
+def poll_questions_view(request: HttpRequest, test_id: str) -> HttpResponse:
+    """HTMX polling endpoint — checks if test questions are ready."""
+    test = services.get_test_or_404(test_id, request.user)
+
+    question_count = TestQuestion.objects.filter(test=test).count()
+
+    if question_count >= 5:
+        response = HttpResponse(status=HTTPStatus.NO_CONTENT)
+        response["HX-Redirect"] = reverse("testing:test", kwargs={"test_id": test_id})
+        return response
+
+    if test.status == Test.Status.USER_TERMINATED:
+        session_url = reverse("teaching:session", kwargs={"session_id": test.session_id})
+        return HttpResponse(
+            '<div class="bg-white border rounded-lg p-6 text-center">'
+            '<p class="text-red-600 mb-3">题目生成失败，请重试。</p>'
+            f'<a href="{session_url}" '
+            'class="text-sm text-blue-600 hover:text-blue-800">返回教学会话</a>'
+            "</div>"
+        )
+
+    poll_url = reverse("testing:poll", kwargs={"test_id": test_id})
+    return HttpResponse(
+        '<div class="bg-white border rounded-lg p-6 text-center" '
+        f'hx-get="{poll_url}" hx-trigger="every 2s" hx-swap="outerHTML">'
+        '<div class="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 '
+        'rounded-full animate-spin mb-3"></div>'
+        '<p class="text-gray-600">正在生成测试题，请稍候...</p>'
+        '<p class="text-xs text-gray-400 mt-1">AI 正在根据教学内容为你出题</p>'
+        "</div>"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -234,14 +282,11 @@ def retest_view(request: HttpRequest, test_id: str) -> HttpResponse:
     session = test.session
 
     attempt_no = services.get_retest_attempt_no(session)
+    new_test = services.create_test(session, request.user, attempt_no=attempt_no)
 
-    try:
-        new_test = services.create_test(session, request.user, attempt_no=attempt_no)
-    except (ConfigurationError, APIError):
-        messages.error(request, "AI 测试题生成暂时不可用，请稍后再试。")
-        return redirect("testing:test", test_id=test_id)
+    generate_test_questions_async.delay(new_test.test_id)
 
-    messages.success(request, f"已生成新的测试题（第 {attempt_no} 次测试）。")
+    messages.success(request, f"测试已创建，正在生成题目（第 {attempt_no} 次测试）。")
     return redirect("testing:test", test_id=new_test.test_id)
 
 
@@ -264,6 +309,82 @@ def terminate_test_view(request: HttpRequest, test_id: str) -> HttpResponse:
     services.terminate_test(test)
     messages.info(request, "测试已终止。")
     return redirect("testing:test", test_id=test_id)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Image generation for test questions (async via Celery)
+# ═══════════════════════════════════════════════════════════════
+
+@profile_required
+def generate_question_image_view(request: HttpRequest, question_id: str) -> HttpResponse:
+    """Dispatch async image generation for a test question.
+
+    POST only. Updates image_prompt if a custom prompt is provided
+    (fallback for questions without LLM-generated image_prompt),
+    then dispatches a Celery task. Returns a spinner that polls
+    until the image is ready.
+    """
+    if request.method != "POST":
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+
+    question = get_object_or_404(TestQuestion, question_id=question_id)
+
+    custom_prompt = request.POST.get("prompt", "").strip()
+    if custom_prompt and not question.image_prompt:
+        question.image_prompt = custom_prompt
+        question.save(update_fields=["image_prompt"])
+
+    # Fallback: construct a prompt from the question text
+    if not question.image_prompt:
+        truncated = question.question_text[:200] if question.question_text else ""
+        if truncated:
+            question.image_prompt = f"DBT正念技能教学情景配图：{truncated}，温暖插画风格"
+            question.save(update_fields=["image_prompt"])
+        else:
+            return _htmx_error("无法生成配图：缺少图片描述。")
+
+    # Dispatch Celery task if no image yet
+    if not question.temporary_image_url:
+        generate_test_question_image_async.delay(question_id)
+
+    return _image_polling_html(question_id)
+
+
+@profile_required
+def question_image_status_view(request: HttpRequest, question_id: str) -> HttpResponse:
+    """HTMX polling endpoint — returns image HTML when ready, or spinner."""
+    question = get_object_or_404(TestQuestion, question_id=question_id)
+
+    if question.temporary_image_url:
+        return HttpResponse(
+            '<div class="mb-4">'
+            f'<img src="{question.temporary_image_url}" alt="题目配图" '
+            'class="w-full max-w-md rounded-lg shadow" loading="lazy">'
+            '<button onclick="DBT_Image.generate(\''
+            f'{question.image_prompt.replace(chr(39), "&#39;")}'
+            '\', \'question-image-area\', '
+            '{source: \'test_illustration\', '
+            f'test_question_id: \'{question_id}\'}})" '
+            'class="mt-2 text-xs text-purple-500 hover:text-purple-700 underline">'
+            '🔄 重新生成配图'
+            '</button>'
+            '</div>'
+        )
+
+    return _image_polling_html(question_id)
+
+
+def _image_polling_html(question_id: str) -> HttpResponse:
+    """Return a spinner div that polls the image-status endpoint."""
+    poll_url = reverse("testing:question_image_status", kwargs={"question_id": question_id})
+    return HttpResponse(
+        '<div class="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-center"'
+        f' hx-get="{poll_url}" hx-trigger="every 3s" hx-swap="outerHTML">'
+        '<div class="inline-block w-4 h-4 border-2 border-purple-200 '
+        'border-t-purple-500 rounded-full animate-spin"></div>'
+        '<span class="text-xs text-purple-600 ml-2">情景配图生成中...</span>'
+        '</div>'
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

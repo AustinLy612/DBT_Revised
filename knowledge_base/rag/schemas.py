@@ -196,6 +196,10 @@ class TestQuestion(BaseModel):
         default_factory=list,
         description="支撑本题的知识库chunk ID列表",
     )
+    image_prompt: str = Field(
+        default="",
+        description="可选：若本题描述了适合配图的情景（考试、课堂、社交场景等），填写中文图片生成prompt。留空表示不需要配图。",
+    )
 
 
 class TestQuestions(BaseModel):

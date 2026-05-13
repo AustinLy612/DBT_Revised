@@ -10,6 +10,7 @@ Test strategy:
 from __future__ import annotations
 
 import io
+import json
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
@@ -109,7 +110,7 @@ class AudioSynthesisLogModelTests(TestCase):
         log = AudioSynthesisLog.objects.create(
             user=user,
             text="你好，欢迎学习DBT技能。",
-            model="speech-2.8-turbo",
+            model="volcengine-tts",
             voice="default",
             temporary_audio_url="https://example.com/audio.mp3",
             status=AudioSynthesisLog.Status.SUCCESS,
@@ -208,41 +209,88 @@ class ImageGenerationServiceTests(TestCase):
 class TTSServiceTests(TestCase):
     def setUp(self):
         self.user = create_student()
+        self.default_speaker = "zh_female_xueayi_saturn_bigtts"
 
     @patch("media_app.services.requests.post")
-    @patch("media_app.services._download_audio")
-    def test_synthesize_speech_success(self, mock_download, mock_post):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "data": {"audio": "https://cdn.example.com/audio.mp3"},
-            "usage": {"total_tokens": 30},
-        }
-        mock_download.return_value = b"fake_audio_data"
+    def test_synthesize_speech_success(self, mock_post):
+        import base64
+        fake_audio = base64.b64encode(b"fake_mp3_audio").decode()
+
+        # V3 API: code 0 = audio chunk, code 20000000 = final success
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = [
+            json.dumps({"code": 0, "data": fake_audio}),
+            json.dumps({"code": 20000000, "message": "OK", "data": None}),
+        ]
+        mock_post.return_value = mock_resp
+
         result = services.synthesize_speech("你好世界")
-        self.assertEqual(result["audio_bytes"], b"fake_audio_data")
+        self.assertEqual(result["audio_bytes"], b"fake_mp3_audio")
         self.assertEqual(result["format"], "mp3")
+        self.assertEqual(result["voice"], self.default_speaker)
 
     @patch("media_app.services.requests.post")
-    @patch("media_app.services._download_audio")
-    def test_synthesize_speech_url_fallback(self, mock_download, mock_post):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "extra_info": {"audio_url": "https://cdn.example.com/audio2.mp3"},
-        }
-        mock_download.return_value = b"audio_from_url"
+    def test_synthesize_speech_custom_voice(self, mock_post):
+        import base64
+        fake_audio = base64.b64encode(b"audio_data").decode()
+
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = [
+            json.dumps({"code": 0, "data": fake_audio}),
+            json.dumps({"code": 20000000, "message": "OK", "data": None}),
+        ]
+        mock_post.return_value = mock_resp
+
+        result = services.synthesize_speech("test", voice="zh_female_vv_uranus_bigtts")
+        self.assertEqual(result["voice"], "zh_female_vv_uranus_bigtts")
+
+    @patch("media_app.services.requests.post")
+    def test_synthesize_speech_multiple_chunks(self, mock_post):
+        import base64
+        fake_audio_1 = base64.b64encode(b"chunk1").decode()
+        fake_audio_2 = base64.b64encode(b"chunk2").decode()
+
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = [
+            json.dumps({"code": 0, "data": fake_audio_1}),
+            json.dumps({"code": 0, "data": fake_audio_2}),
+            json.dumps({"code": 0, "data": None, "sentence": {"text": "test"}}),
+            json.dumps({"code": 20000000, "message": "OK", "data": None}),
+        ]
+        mock_post.return_value = mock_resp
+
         result = services.synthesize_speech("test")
-        self.assertEqual(result["audio_bytes"], b"audio_from_url")
+        self.assertEqual(result["audio_bytes"], b"chunk1chunk2")
 
     @patch("media_app.services.requests.post")
     def test_synthesize_speech_api_error(self, mock_post):
-        mock_post.return_value.status_code = 500
-        mock_post.return_value.text = "Internal Server Error"
-        mock_post.return_value.json.return_value = {}
+        mock_resp = Mock()
+        mock_resp.status_code = 500
+        mock_resp.text = "Internal Server Error"
+        mock_resp.json.return_value = {}
+        mock_post.return_value = mock_resp
+
         with self.assertRaises(services.APIError):
             services.synthesize_speech("test")
 
+    @patch("media_app.services.requests.post")
+    def test_synthesize_speech_business_error(self, mock_post):
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = [
+            json.dumps({"code": 55000000, "message": "resource ID mismatched"}),
+        ]
+        mock_post.return_value = mock_resp
+
+        with self.assertRaises(services.APIError) as ctx:
+            services.synthesize_speech("!!!")
+        self.assertIn("resource ID mismatched", str(ctx.exception))
+
     def test_synthesize_speech_missing_key(self):
-        with patch.object(services, "_get_api_key", side_effect=services.ConfigurationError("no key")):
+        with patch.object(services, "_get_volcengine_api_key", side_effect=services.ConfigurationError("no key")):
             with self.assertRaises(services.ConfigurationError):
                 services.synthesize_speech("test")
 
@@ -425,9 +473,10 @@ class TTSViewTests(TestCase):
         mock_tts.return_value = {"audio_bytes": b"data", "audio_url": "", "format": "mp3"}
         long_text = "测" * 4000
         self.client.post(self.url, {"text": long_text})
-        # Should have been truncated to 3000 chars before calling service
+        # Text is first truncated to 3000 chars, then trimmed to ≤1000 UTF-8 bytes
+        # "测" is 3 bytes in UTF-8, so 1000/3 ≈ 333 chars
         called_text = mock_tts.call_args[0][0]
-        self.assertEqual(len(called_text), 3000)
+        self.assertEqual(len(called_text), 333)
 
 
 class ASRViewTests(TestCase):
@@ -600,10 +649,10 @@ class TTSLogEdgeCaseTests(TestCase):
         log = AudioSynthesisLog.objects.create(
             user=self.user,
             text="test",
-            model="speech-2.8-hd",
-            voice="male_voice_1",
+            model="volcengine-tts",
+            voice="BV001_streaming",
         )
-        self.assertEqual(log.model, "speech-2.8-hd")
+        self.assertEqual(log.model, "volcengine-tts")
         self.assertEqual(log.voice, "male_voice_1")
 
 
@@ -649,3 +698,151 @@ class APIErrorHierarchyTests(TestCase):
 
         # Verify they are different types
         self.assertNotEqual(services.ConfigurationError, services.APIError)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Test Database Isolation Tests
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestDatabaseIsolationTests(TestCase):
+    """Verify that Django tests NEVER touch the production database.
+
+    These tests are the guardrails: if they fail, data loss is imminent.
+    """
+
+    def test_settings_have_test_name_prefix(self):
+        """The configured TEST.NAME must contain 'test_' prefix."""
+        import environ
+        from django.conf import settings as s
+        test_name = s.DATABASES["default"].get("TEST", {}).get("NAME", "")
+        self.assertTrue(
+            test_name.startswith("test_"),
+            f"TEST.NAME='{test_name}' must start with 'test_'",
+        )
+        # Compare against the env value, not settings.DATABASES["NAME"]
+        # (which the MongoDB test creation may have already changed to
+        # the test database by the time this test runs).
+        env = environ.Env()
+        environ.Env.read_env()
+        prod_db = env("MONGODB_NAME", default="dbt_platform")
+        self.assertNotEqual(
+            test_name,
+            prod_db,
+            f"TEST.NAME='{test_name}' must differ from production DB name '{prod_db}'",
+        )
+
+    def test_safety_runner_is_configured(self):
+        """Verify SafetyTestRunner is the active test runner."""
+        from django.conf import settings as s
+        runner = getattr(s, "TEST_RUNNER", "")
+        self.assertIn(
+            "SafetyTestRunner",
+            runner,
+            f"TEST_RUNNER='{runner}' must be SafetyTestRunner",
+        )
+
+    def test_safety_runner_detects_bad_config(self):
+        """SafetyTestRunner must raise TestDatabaseSafetyError for invalid TEST.NAME."""
+        from dbt_platform.test_runner import SafetyTestRunner, TestDatabaseSafetyError
+
+        runner = SafetyTestRunner()
+        bad_db_settings = {
+            "ENGINE": "django_mongodb_backend",
+            "NAME": "production_db",
+            "TEST": {"NAME": "production_db"},  # missing test_ prefix — DANGEROUS
+        }
+
+        with self.assertRaises(TestDatabaseSafetyError):
+            runner._enforce_test_name_prefix(
+                {"default": bad_db_settings}
+            )
+
+    def test_safety_runner_accepts_good_config(self):
+        """SafetyTestRunner must NOT raise for a valid TEST.NAME."""
+        from dbt_platform.test_runner import SafetyTestRunner
+
+        runner = SafetyTestRunner()
+        good_db_settings = {
+            "ENGINE": "django_mongodb_backend",
+            "NAME": "dbt_platform",
+            "TEST": {"NAME": "test_dbt_platform"},
+        }
+
+        # Should not raise
+        runner._enforce_test_name_prefix(
+            {"default": good_db_settings}
+        )
+
+    def test_current_test_db_name_is_prefixed(self):
+        """When running under Django test discovery, the active connection
+        must use a test_* database.  Skip this check when running standalone
+        (e.g. via python -c with TextTestRunner) because the test runner's
+        database setup hasn't been invoked.
+        """
+        import sys
+        from django.db import connections
+
+        # Only check when running via manage.py test (which calls setup_databases)
+        is_managed_test = any(
+            arg for arg in sys.argv
+            if arg.endswith("manage.py") or "test" in arg
+        )
+        if not is_managed_test:
+            # Not running under manage.py test — skip the runtime DB check
+            # but the config checks (above) still apply
+            return
+
+        db_name = connections["default"].settings_dict["NAME"]
+        self.assertTrue(
+            db_name.startswith("test_"),
+            f"Active DB '{db_name}' must start with 'test_'. WARNING: tests might destroy production data!",
+        )
+
+
+class ImageGenerationRetryTests(TestCase):
+    """Tests for generate_image retry logic on transient HTTP errors."""
+
+    def setUp(self):
+        self.user = create_student()
+
+    @patch("media_app.services.requests.post")
+    def test_retries_on_429_then_succeeds(self, mock_post):
+        """429 rate-limit responses trigger retry with backoff, then succeed."""
+        rate_limited = Mock()
+        rate_limited.status_code = 429
+        rate_limited.json.return_value = {"error": {"message": "rate limited"}}
+
+        success = Mock()
+        success.status_code = 200
+        success.json.return_value = {
+            "data": {"image_urls": ["https://cdn.example.com/img.png"]},
+            "usage": {},
+        }
+
+        mock_post.side_effect = [rate_limited, rate_limited, success]
+
+        result = services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+        self.assertEqual(len(result["urls"]), 1)
+        self.assertEqual(mock_post.call_count, 3)
+
+    @patch("media_app.services.requests.post")
+    def test_no_retry_on_400(self, mock_post):
+        """400 (client error) should NOT retry — it's a permanent error."""
+        mock_post.return_value.status_code = 400
+        mock_post.return_value.json.return_value = {"error": {"message": "bad request"}}
+
+        with self.assertRaises(services.APIError):
+            services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+        self.assertEqual(mock_post.call_count, 1)
+
+    @patch("media_app.services.requests.post")
+    def test_exhausts_retries_then_raises(self, mock_post):
+        """When all retries return transient errors, eventually raise APIError."""
+        mock_post.return_value.status_code = 503
+        mock_post.return_value.json.return_value = {"error": {"message": "service unavailable"}}
+
+        with self.assertRaises(services.APIError) as ctx:
+            services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+        self.assertIn("503", str(ctx.exception))
+        self.assertEqual(mock_post.call_count, 3)  # 1 initial + 2 retries

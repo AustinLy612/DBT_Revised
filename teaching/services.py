@@ -427,6 +427,57 @@ def run_teaching_plan(session: models.Model, user: models.Model) -> dict[str, An
     return plan_dict
 
 
+def _generate_opening_message(
+    session: models.Model,
+    user: models.Model,
+    profile: Any,
+) -> str | None:
+    """Generate and save the AI's opening teaching message.
+
+    Called automatically when the teaching phase begins, so the student
+    sees a warm greeting and skill introduction without having to type
+    first.
+    """
+    from .models import ChatMessage
+    from knowledge_base.rag.chains import generate_teaching_opening
+    from knowledge_base.rag.retriever import get_retriever
+
+    plan_steps = session.teaching_plan.get("plan_steps", []) if session.teaching_plan else []
+
+    retriever = get_retriever(k=3, user=user, session=session, use_case="teaching")
+    result = generate_teaching_opening(
+        profile=profile,
+        selected_skill=session.selected_skill or "",
+        selected_module=session.selected_module or "",
+        selection_reason=session.selection_reason or "",
+        personal_context=session.personal_context or "",
+        teaching_plan_steps=plan_steps,
+        retriever=retriever,
+    )
+
+    content_dict = result.model_dump()
+
+    ai_msg = ChatMessage.objects.create(
+        session=session,
+        user=user,
+        role=ChatMessage.Role.ASSISTANT,
+        content=content_dict["content"],
+        image_prompt=content_dict.get("image_prompt", ""),
+    )
+
+    if content_dict.get("source_chunk_ids"):
+        existing_ids = list(session.rag_context_ids or [])
+        for cid in content_dict["source_chunk_ids"]:
+            if cid not in existing_ids:
+                existing_ids.append(cid)
+        session.rag_context_ids = existing_ids
+        session.save(update_fields=["rag_context_ids"])
+
+    logger.info("AI teaching opening generated for session %s: msg=%s",
+                session.session_id, ai_msg.message_id)
+    return ai_msg.message_id
+
+
 # ═══════════════════════════════════════════════════════════════
 # Teaching dialogue
 # ═══════════════════════════════════════════════════════════════
