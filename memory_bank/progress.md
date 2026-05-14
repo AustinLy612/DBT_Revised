@@ -2488,3 +2488,121 @@ def get_retest_attempt_no(session):
 | `testing/views.py` | `test_view` 新增 `is_stuck` 检测逻辑（>5min + 0 questions） |
 | `templates/testing/test.html` | 新增 stuck 状态分支：显示超时错误 + 恢复按钮 |
 | `testing/services.py` | `get_retest_attempt_no` 从 max-based 改为 count-based |
+
+---
+
+## Step 16: Report Viewer Permission Expansion — COMPLETED (2026-05-14)
+
+### 背景
+
+`report_viewer` 角色（教师/报告查看者）此前只能查看学生报告和导出 PDF，无法访问数据导出页面（`/export/`）。`export_app/views.py` 中的 `_is_admin()` gate 仅允许 `user.role == "admin" or user.is_staff`，report_viewer 会被 403 拒绝。
+
+用户需求：让 report_viewer 也能导出所有学生的 JSON/CSV 原始数据。
+
+### 改动 1: 扩展 `_is_admin()` gate (`export_app/views.py`)
+
+```python
+# 旧
+def _is_admin(user):
+    return user.is_authenticated and (user.role == "admin" or user.is_staff)
+
+# 新
+def _is_admin(user):
+    return user.is_authenticated and user.role in ("admin", "report_viewer") or user.is_staff
+```
+
+一次改动影响全部 5 个导出视图（export page, single JSON, single CSV, bulk JSON, bulk CSV）。
+
+### 改动 2: 导出页面返回链接角色适配 (`templates/export_app/export_page.html`)
+
+原先硬编码 `{% url 'admin:index' %}` 作为返回链接，但 report_viewer 被 `AdminAccessMiddleware` 拦截无法访问 `/admin/`。
+
+改为角色感知链接：
+- `admin` → 返回管理后台（`admin:index`）
+- `report_viewer` → 返回报告仪表盘（`reports:dashboard`）
+
+### 改动 3: 教师使用指南更新 (`docs/教师使用指南.md`)
+
+- 更新角色描述：从"查看被授权学生"改为"查看所有学生"，增加"导出学生原始数据"
+- 新增**第五章：导出学生数据**，涵盖访问入口、单个/批量导出、JSON/CSV 说明
+- 原第五、六章顺延为第六、七章
+- 更新 FAQ：删除 `ReportViewerAssignment` 相关误导内容，新增原始数据导出说明
+
+### 改动 4: Memory Bank 更新
+
+- **`architecture.md`**：
+  - 权限模型表格更新：report_viewer 增加 "raw data export (JSON/CSV) for all students"
+  - 报告模块描述修正：反映当前 "all students" 行为（非 assignment-filtered），标注 `ReportViewerAssignment` 为 dead schema
+  - 新增 §14b：Export App & Permission Expansion，记录 `_is_admin()` 逻辑和 5 个导出视图
+- **`progress.md`**：新增 Step 16 完整记录
+
+### 修改的文件
+
+| 文件 | 改动 |
+|------|------|
+| `export_app/views.py` | `_is_admin()` 网关扩展为允许 admin + report_viewer |
+| `templates/export_app/export_page.html` | 返回链接改为角色感知 |
+| `docs/教师使用指南.md` | 角色描述更新 + 新增导出章节 + FAQ 修正 |
+| `memory_bank/architecture.md` | 权限模型 + 报告模块修正 + 新增 §14b |
+| `memory_bank/progress.md` | 新增 Step 16 |
+
+---
+
+## Step 17: Bug Fixes & Report/Export Unification — COMPLETED (2026-05-14)
+
+### 问题 1: 导出 JSON/CSV 报错 AttributeError (`export_app/services.py`)
+
+`aggregate_user_data()` 中引用了不存在的字段：
+- `profile.hobbies` → 实际字段是 `hobby_tags`
+- `profile.troubles` → 实际字段是 `concern_tags`
+- `profile.other_notes` → 不存在，替换为 `other_hobby_text` 和 `other_concern_text`
+
+修复：将字段名改为 UserProfile 模型中实际存在的字段。
+
+### 问题 2: PDF 报告中文全部显示为方框
+
+WeasyPrint PDF 渲染需要中文字体，但 Docker 镜像中仅安装了 DejaVu 字体（不支持中文）。
+
+修复：
+- **Dockerfile**：添加 `fonts-wqy-microhei`（文泉驿微米黑）包
+- **`student_report_pdf.html`**：CSS font-family 添加 `"WenQuanYi Micro Hei"` 作为首选字体
+- 运行中容器直接安装字体以立即生效
+
+### 问题 3: 报告页面与导出页面合并
+
+原 `/reports/`（查看报告、导出 PDF）和 `/export/`（导出 JSON/CSV）为两个独立页面，功能相似但入口不同，使用不便。
+
+合并方案：
+- **`templates/reports/dashboard.html`** — 重写为统一页面，包含：
+  - 页面顶部：批量导出按钮（导出全部 JSON / 导出全部 CSV）
+  - 学生表格：用户名、注册时间、报告操作（查看报告 + 导出 PDF）、数据导出（JSON + CSV）
+- **`export_app/views.py`** `export_page_view` — 改为重定向到 `reports:dashboard`
+- 访问 `/export/` 自动跳转到 `/reports/`，统一入口
+- 两个角色（admin 和 report_viewer）均可在同一页面完成所有操作
+
+### 问题 4: 导出 JSON 报错 TypeError — datetime 不可序列化
+
+`aggregate_user_data()` 中 ChatMessage 的 `created_at` 通过 `.values()` 获取时返回原始 datetime 对象，`json.dumps()` 无法序列化。
+
+修复：在 messages 循环中添加 `m["created_at"] = m["created_at"].isoformat() if m["created_at"] else None`。
+
+### 问题 5: PDF 中 emoji（心情表情、成就图标）显示错误
+
+中文字体（文泉驿微米黑）不包含 emoji 字形，PDF 中显示为方框或乱码。
+
+修复：
+- 心情记录：移除 emoji 图标，仅保留数值分值（如 `4/5`）
+- 成就卡片：移除 icon 字段，仅保留成就名称
+
+### 修改的文件
+
+| 文件 | 改动 |
+|------|------|
+| `export_app/services.py` | 修复字段名 + 新增 messages created_at isoformat 转换 |
+| `Dockerfile` | 添加 fonts-wqy-microhei 中文字体包 |
+| `templates/reports/student_report_pdf.html` | CSS font-family 添加 "WenQuanYi Micro Hei"；移除心情 emoji 和成就 icon emoji |
+| `templates/reports/dashboard.html` | 重写为统一的「学生报告与数据导出」页面（表格 + 报告/导出双列操作） |
+| `export_app/views.py` | `export_page_view` 改为重定向到 reports:dashboard |
+| `docs/教师使用指南.md` | 更新导出章节：合并入口、批量导出说明 |
+| `docs/管理员使用指南.md` | 更新场景 6 和 FAQ 中的导出入口说明 |
+| `memory_bank/progress.md` | 新增 Step 17 |

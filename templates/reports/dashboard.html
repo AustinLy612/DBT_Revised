@@ -1,22 +1,70 @@
 {% extends "base.html" %}
-{% block title %}报告面板 - DBT 技能教学平台{% endblock %}
+{% block title %}学生报告与数据导出 - DBT 技能教学平台{% endblock %}
 {% block content %}
-<h1 class="text-2xl font-bold text-gray-800 mb-6">学生报告面板</h1>
-{% if authorized_students %}
-    <div class="grid gap-3">
-    {% for student in authorized_students %}
-        <a href="{% url 'reports:student_report' student.id %}"
-           class="block bg-white border rounded-lg p-4 hover:shadow transition">
-            <span class="font-medium text-blue-700">{{ student.username }}</span>
-            <span class="text-sm text-gray-500 ml-3">
-                注册时间: {{ student.date_joined|date:"Y-m-d" }}
-            </span>
-        </a>
-    {% endfor %}
+
+<div class="max-w-4xl mx-auto mt-6">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">学生报告与数据导出</h1>
+            <p class="text-sm text-gray-500 mt-1">查看学生报告、导出 PDF 和原始数据</p>
+        </div>
+        <div class="flex gap-2">
+            <a href="{% url 'export_app:export_users_json' %}"
+               class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
+                导出全部 (JSON)
+            </a>
+            <a href="{% url 'export_app:export_users_csv' %}"
+               class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">
+                导出全部 (CSV)
+            </a>
+        </div>
     </div>
-{% else %}
-    <div class="bg-yellow-50 border border-yellow-200 rounded p-4 text-yellow-700">
-        暂无授权查看的学生。
+
+    {% if authorized_students %}
+    <div class="bg-white border rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+            <thead class="bg-gray-50 border-b">
+                <tr>
+                    <th class="text-left px-4 py-3 font-medium text-gray-600">用户名</th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-600">注册时间</th>
+                    <th class="text-center px-4 py-3 font-medium text-gray-600">报告</th>
+                    <th class="text-center px-4 py-3 font-medium text-gray-600">数据导出</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for student in authorized_students %}
+                <tr class="border-b last:border-0 hover:bg-gray-50">
+                    <td class="px-4 py-3">
+                        <span class="font-medium text-gray-800">{{ student.username }}</span>
+                    </td>
+                    <td class="px-4 py-3 text-gray-500">
+                        {{ student.date_joined|date:"Y-m-d H:i" }}
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <a href="{% url 'reports:student_report' student.id %}"
+                           class="text-xs text-blue-600 hover:text-blue-800 mr-3">查看报告</a>
+                        <a href="{% url 'reports:student_report_pdf' student.id %}"
+                           class="text-xs text-purple-600 hover:text-purple-800">导出 PDF</a>
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <a href="{% url 'export_app:export_user_json' student.id %}"
+                           class="text-xs text-blue-600 hover:text-blue-800 mr-3">JSON</a>
+                        <a href="{% url 'export_app:export_user_csv' student.id %}"
+                           class="text-xs text-green-600 hover:text-green-800">CSV</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
-{% endif %}
+    {% else %}
+    <div class="bg-yellow-50 border border-yellow-200 rounded p-4 text-yellow-700 text-sm">
+        暂无学生用户。
+    </div>
+    {% endif %}
+
+    <p class="text-xs text-gray-400 mt-4">
+        所有导出操作均会记录到操作日志中。
+    </p>
+</div>
 {% endblock %}

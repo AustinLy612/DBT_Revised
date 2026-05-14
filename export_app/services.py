@@ -29,6 +29,8 @@ def aggregate_user_data(user):
             .order_by("created_at")
             .values("message_id", "role", "content", "modality", "created_at")
         )
+        for m in messages:
+            m["created_at"] = m["created_at"].isoformat() if m["created_at"] else None
         sessions_data.append(
             {
                 "session_id": s.session_id,
@@ -133,9 +135,10 @@ def aggregate_user_data(user):
             "gender": profile.gender if profile else "",
             "age": profile.age if profile else None,
             "grade": profile.grade if profile else "",
-            "hobbies": profile.hobbies if profile else [],
-            "troubles": profile.troubles if profile else [],
-            "other_notes": profile.other_notes if profile else "",
+            "hobbies": profile.hobby_tags if profile else [],
+            "troubles": profile.concern_tags if profile else [],
+            "other_hobby": profile.other_hobby_text if profile else "",
+            "other_concern": profile.other_concern_text if profile else "",
         },
         "teaching_sessions": sessions_data,
         "tests": tests_data,
@@ -166,7 +169,9 @@ def export_user_csv(user):
         [u["username"], u["role"], u["date_joined"], p["gender"], p["age"], p["grade"]]
     )
     writer.writerow(["爱好", ", ".join(p["hobbies"]) if p["hobbies"] else ""])
+    writer.writerow(["其他爱好", p.get("other_hobby", "")])
     writer.writerow(["困扰", ", ".join(p["troubles"]) if p["troubles"] else ""])
+    writer.writerow(["其他困扰", p.get("other_concern", "")])
     writer.writerow([])
 
     # Teaching sessions

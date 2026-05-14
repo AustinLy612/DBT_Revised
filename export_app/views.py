@@ -11,21 +11,17 @@ from accounts.models import User
 
 
 def _is_admin(user):
-    return user.is_authenticated and (user.role == "admin" or user.is_staff)
+    return user.is_authenticated and user.role in ("admin", "report_viewer") or user.is_staff
 
 
 @login_required
 def export_page_view(request):
-    """Admin export page — lists students with export options."""
+    """Redirect to unified reports + export dashboard."""
     if not _is_admin(request.user):
         raise PermissionDenied("你没有权限访问导出功能。")
+    from django.shortcuts import redirect
 
-    students = User.objects.filter(role="student").order_by("username")
-    return render(
-        request,
-        "export_app/export_page.html",
-        {"students": students},
-    )
+    return redirect("reports:dashboard")
 
 
 @login_required

@@ -124,8 +124,8 @@ Configuration variables that MUST change for production:
 | Role | Access |
 |------|--------|
 | `student` | Own teaching, tests, mood, achievements; cannot view reports |
-| `report_viewer` | Read-only individual student visualization reports within authorized scope; can export PDF reports; cannot access raw data or admin |
-| `admin` | Full admin panel, raw data export (JSON/CSV/Excel), RAG document management, operation logs |
+| `report_viewer` | Read-only access to ALL student reports (dashboard + individual + PDF export); raw data export (JSON/CSV) for all students; cannot access admin panel |
+| `admin` | Full admin panel, all export access, RAG document management, operation logs |
 
 ### 9. Data Flow for a Teaching Session
 ```
@@ -202,15 +202,43 @@ The `User.save()` override guarantees these stay in sync: whenever `role="admin"
 
 ### 14. Reports Module (Post-Review Fix)
 
-**`reports/views.py`** — Two role-gated views:
-- `dashboard_view`: report_viewers see only students assigned via active `ReportViewerAssignment`; admins see all students. Students and unauthenticated users get 403.
-- `student_report_view`: checks `ReportViewerAssignment.is_active` for report_viewers; admins bypass. Accessing a non-assigned student returns 403.
+**`reports/views.py`** — Three role-gated views:
+- `dashboard_view`: report_viewers and admins see ALL students (no assignment filtering). Students and unauthenticated users get 403.
+- `student_report_view`: report_viewers and admins can view any student's individual report. Accessing a non-existent student returns 404.
+- `student_report_pdf_view`: same access control as `student_report_view`, returns PDF via WeasyPrint.
 
-**`reports/urls.py`** — `/reports/` (dashboard) and `/reports/student/<student_id>/` (individual report).
-**`templates/reports/dashboard.html`** — Lists authorized students as clickable cards.
-**`templates/reports/student_report.html`** — Placeholder for full report (Step 9+).
+**`reports/urls.py`** — `/reports/` (dashboard), `/reports/student/<student_id>/` (individual report), `/reports/student/<student_id>/pdf/` (PDF export).
+**`templates/reports/dashboard.html`** — Lists all students as clickable cards.
+**`templates/reports/student_report.html`** — Full 7-block report: basic info, AI summary, overview cards, mood chart (SVG), skill learning counts (CSS bar chart), test records table, achievements.
 
-The authorization check in `student_report_view` is the enforcement point for "报告查看用户只能看到被授权学生的报告入口". The `ReportViewerAssignment` model's `is_active` flag is checked on every request, so deactivating an assignment immediately revokes access.
+Note: `ReportViewerAssignment` model exists in `accounts/models.py` but is NOT enforced in views — it's a dead schema. All report_viewers can see all students. This was intentional to simplify teacher workflows.
+
+### 14b. Export App & Unified Dashboard (Step 16-17)
+
+**`export_app/views.py`** — Five views protected by `_is_admin()` gate:
+- `export_page_view`: redirects to `reports:dashboard` (unified page, Step 17)
+- `export_user_json_view`: single student JSON download
+- `export_user_csv_view`: single student CSV download
+- `export_users_json_view`: bulk all-students JSON download
+- `export_users_csv_view`: bulk all-students CSV download
+
+As of Step 16, `_is_admin()` grants access to both `admin` and `report_viewer` roles:
+```python
+def _is_admin(user):
+    return user.is_authenticated and user.role in ("admin", "report_viewer") or user.is_staff
+```
+
+**`templates/reports/dashboard.html`** — Unified page (Step 17) combining report viewing + data export:
+- Student table with columns: username, registration date, report actions (view report + export PDF), data export (JSON + CSV)
+- Bulk export buttons at page top (export all JSON / export all CSV)
+- Accessible by both admin and report_viewer at `/reports/`
+- `/export/` redirects to `/reports/`
+
+**`export_app/services.py`** — `aggregate_user_data()`, `export_user_json()`, `export_user_csv()` aggregate all student data. Key detail: `.values()` querysets return raw datetime objects; all datetime fields must be explicitly converted via `.isoformat()` before JSON serialization (fixed in Step 17 for ChatMessage.created_at).
+
+**`templates/reports/student_report_pdf.html`** — WeasyPrint PDF template. Uses `"WenQuanYi Micro Hei"` as primary font (installed via `fonts-wqy-microhei` in Dockerfile, Step 17). Emoji characters removed from PDF output (not supported by Chinese fonts).
+
+All export operations are audited via `AdminOperationLog` (admin user, operation type, target, format, scope).
 
 ### 15. Admin Visibility Layer (Step 3)
 

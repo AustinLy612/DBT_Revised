@@ -5,7 +5,7 @@
 <title>{{ student.username }} 的个人报告</title>
 <style>
   @page { margin: 2cm; size: A4; }
-  body { font-family: "Noto Sans SC", "SimSun", sans-serif; font-size: 11pt; color: #333; line-height: 1.6; }
+  body { font-family: "WenQuanYi Micro Hei", "Noto Sans SC", "SimSun", sans-serif; font-size: 11pt; color: #333; line-height: 1.6; }
   h1 { font-size: 18pt; border-bottom: 2px solid #2563eb; padding-bottom: 8px; margin-bottom: 12px; }
   h2 { font-size: 13pt; color: #2563eb; margin-top: 22px; margin-bottom: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
   h3 { font-size: 11pt; color: #374151; margin: 6px 0; }
@@ -93,7 +93,7 @@
   {% for m in mood_history %}
   <tr>
     <td>{{ m.created_at|date:"Y-m-d H:i" }}</td>
-    <td>{{ m.emoji }} ({{ m.mood_value }}/5)</td>
+    <td>{{ m.mood_value }}/5</td>
     <td>
       {% if m.context == 'before_teaching' %}教学前
       {% elif m.context == 'after_teaching' %}教学后
@@ -154,7 +154,7 @@
 {% if achievements %}
 {% for ua in achievements %}
 <div class="achievement-card">
-  <strong>{{ ua.achievement.icon|default:"🏆" }} {{ ua.achievement.name_cn }}</strong>
+  <strong>{{ ua.achievement.name_cn }}</strong>
   <span style="color: #6b7280; font-size: 9pt;"> — {{ ua.achievement.description_cn }}</span>
   <span style="color: #9ca3af; font-size: 8pt;">（解锁于 {{ ua.unlocked_at|date:"Y-m-d" }}）</span>
 </div>
