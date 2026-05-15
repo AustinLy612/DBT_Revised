@@ -1,6 +1,7 @@
 # DBT 平台并发性能评估与优化方案
 
 > 评估日期：2026-05-14
+> 优化实施：2026-05-15（优先级 0 三项已完成 + 4.5 方案 a 已完成）
 
 ---
 
@@ -138,9 +139,12 @@
 
 ## 4. 优化方案
 
-### 优先级 0（低投入，需充分验证）
+### 优先级 0（低投入，需充分验证）— ✅ 已于 2026-05-15 实施
 
-#### 4.1 启用 Gunicorn 异步 Worker（gevent）— 有潜力但风险需充分评估
+> **实施决策**：4.1 采用 gthread（gevent 的安全替代），4.2 workers 3→4，4.3 全量实施。
+> 详见 `memory_bank/progress.md` Step 18 和 `progress.md` 并发优化章节。
+
+#### 4.1 启用 Gunicorn 异步 Worker（gevent）— 已采用 gthread 替代方案实施
 
 当前 `sync` worker 被 I/O 阻塞。gevent 通过 monkey-patching 将标准库的阻塞 I/O（socket、ssl、threading 等）替换为协程实现，使单个 worker 在等待 I/O 时能切换到其他请求。**但并非所有组件在 gevent 下都能安全工作**。
 
@@ -239,7 +243,27 @@ def _get_session() -> requests.Session:
 
 **注意**：这会改变用户体验（从实时流式变为需要等待）。更优方案是使用 SSE + gevent（见 4.1）。
 
-#### 4.5 将 Embedding 模型独立为微服务
+#### 4.5 将 Embedding 模型独立为微服务 — ✅ 方案 a 已于 2026-05-15 实施
+
+> **实际实施与文档假设的差异**：
+> - 文档假设"Qdrant 原生支持 BGE-M3"——但 Qdrant 1.17.1 self-hosted 无服务端推理能力（无 `/inference` API、无 Python 运行时）。此假设不成立。
+> - 实际采用 **fastembed ONNX 后端** 替代 PyTorch SentenceTransformer，模型从 `BAAI/bge-m3` 切换为 `intfloat/multilingual-e5-large`（同为 1024-dim，多语言），达到与原方案相同的目标：用 ONNX Runtime 减少内存。
+
+**实施措施**（详见 `progress.md` 4.5 章节）：
+
+1. **gunicorn `--preload`**：模型在 master 进程加载一次（~2GB），3 个 worker 通过 fork + copy-on-write 共享内存页
+2. **环境变量门控 `EMBEDDING_PRELOAD=true`**：仅在 web 服务预加载；worker/beat 不预加载（仅文档处理时懒加载）
+3. **同步加载**：确保模型在 fork 前完成加载
+
+**实测效果**：
+| 容器 | 修复前 | 修复后 | 改善 |
+|------|--------|--------|------|
+| web | 7.77 GB | 3.39 GB | -56% |
+| worker | 2.14 GB | 0.84 GB | -61% |
+| beat | 1.95 GB | 0.68 GB | -65% |
+| 系统总使用 | ~12 GB | ~5.2 GB | -57% |
+
+原方案 `BAAI/bge-m3` (SentenceTransformer) 与 `intfloat/multilingual-e5-large` (fastembed) 的原始讨论：
 
 当前 `BGE-M3` 在每个 Gunicorn worker 和 Celery worker 进程中各自加载一份。改为独立服务：
 

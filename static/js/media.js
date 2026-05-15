@@ -12,14 +12,14 @@
   let currentAudioMsgId = null;
   let isAudioPlaying = false;  // explicit flag — audio.paused is unreliable during buffering
   let _autoPlayPending = false;  // guard against double auto-play triggers
-  // TTS auto-play: persisted in localStorage, default ON
-  const AUTO_PLAY_STORAGE_KEY = "dbt_tts_autoplay";
+  // TTS auto-play: persisted in localStorage, default OFF
+  const AUTO_PLAY_STORAGE_KEY = "dbt_tts_autoplay_v2";
   // Blob URL cache: avoids redundant TTS API calls for the same message
   const _blobCache = new Map();  // messageId → {blob: Blob, url: string}
   const BLOB_CACHE_MAX = 20;
 
   function _getAutoPlay() {
-    return localStorage.getItem(AUTO_PLAY_STORAGE_KEY) !== "false";
+    return localStorage.getItem(AUTO_PLAY_STORAGE_KEY) === "true";
   }
 
   function _setAutoPlay(enabled) {
@@ -658,10 +658,7 @@
     requestAnimationFrame(function () {
       DBT_Chat.scrollToBottom();
     });
-    // Auto-play TTS after a short delay (wait for scroll)
-    setTimeout(function () {
-      DBT_TTS.autoPlayLatest();
-    }, 400);
+    // Auto-play TTS removed — user must click play button manually
   });
 
   // Scroll chat to bottom on initial load
@@ -778,9 +775,7 @@
             if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
             if (streamText) streamText.id = "";
             if (aiBubble) aiBubble.id = "";
-            // Scroll and trigger TTS auto-play
             DBT_Chat.scrollToBottom();
-            setTimeout(function () { DBT_TTS.autoPlayLatest(); }, 400);
             return;
           }
 

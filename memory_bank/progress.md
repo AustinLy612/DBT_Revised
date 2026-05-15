@@ -2606,3 +2606,177 @@ WeasyPrint PDF 渲染需要中文字体，但 Docker 镜像中仅安装了 DejaV
 | `docs/教师使用指南.md` | 更新导出章节：合并入口、批量导出说明 |
 | `docs/管理员使用指南.md` | 更新场景 6 和 FAQ 中的导出入口说明 |
 | `memory_bank/progress.md` | 新增 Step 17 |
+
+
+## Step 18: Concurrency Optimization (Priority 0) — COMPLETED (2026-05-15)
+
+基于 `memory_bank/concurrency-analysis.md` 的优先级 0 三项优化，在不改变业务逻辑的前提下提升并发处理能力。
+
+### 优化前状态
+
+| 指标 | 值 |
+|------|-----|
+| Gunicorn Worker 类型 | sync (同步阻塞) |
+| Workers 数量 | 3 |
+| 最大并发 I/O 连接 | 3 (每 worker 同时处理 1 个请求) |
+| HTTP 连接复用 | 无 (每次 API 调用新建 TCP+TLS) |
+| Web 容器内存 | ~2.7 GB |
+
+### 优化 4.1: Gunicorn 异步 Worker (gthread)
+
+**方案选择**：concurrency-analysis 文档对 gevent 的评估结论是"不能作为低风险的默认推荐"，需逐一验证 6 项兼容性（pymongo C 扩展、Qdrant HTTP 客户端、SSE StreamingHttpResponse、BGE-M3 embedding 协程调度、requests + SSL、火山引擎流式 HTTP）。按文档推荐采用 **gthread** 作为安全替代：
+
+- 无需 monkey-patching，兼容性好
+- 基于原生线程，每个 worker 内 8 个线程可并发处理 I/O
+- 对 CPU 密集型操作（BGE-M3 embedding）仍有 GIL 串行限制，但 I/O 等待期间 GIL 释放，其他线程可继续处理请求
+
+**修改文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `Dockerfile:29` | CMD 改为 `--worker-class gthread --workers 4 --threads 8 --timeout 120` |
+| `docker-compose.yml:7` | web 服务 command 同步更新 |
+
+### 优化 4.2: Workers 数量调整 (3 → 4)
+
+**依据**：实测 `docker stats`：
+- 服务器总内存 14GB，优化前 web 容器 ~2.7GB，系统可用 ~5GB
+- 每增加一个 worker 约增加 200-400MB 内存（不含 embedding 模型）
+- 4 workers 为安全上限内，仍有 5GB+ 可用内存
+
+| 项目 | 优化前 | 优化后 |
+|------|--------|--------|
+| Workers | 3 | 4 |
+| Threads per worker | 1 (sync) | 8 (gthread) |
+| 最大并发 I/O | 3 | 32 (4×8) |
+| Web 容器内存 | ~2.7 GB | ~4.2 GB |
+
+### 优化 4.3: HTTP 连接池复用 (requests.Session)
+
+使用 `threading.local()` 实现线程安全的 per-thread Session（适配 gthread 多线程环境，`requests.Session` 本身非线程安全）。
+
+**修改文件**：
+
+| 文件 | 改动 |
+|------|------|
+| `knowledge_base/rag/llm_client.py` | 新增 `import threading`、`_local = threading.local()`、`_get_session()` 函数；`minimax_chat_completion()` 和 `minimax_chat_completion_stream()` 中 `requests.post()` → `_get_session().post()` |
+| `media_app/services.py` | 同上模式；覆盖 `generate_image()`（MiniMax Image）、`synthesize_speech()`（Volcengine TTS 流式）、`stream_synthesize_speech()`（Volcengine TTS 流式）、`transcribe_audio()` 中的提交 (`requests.post`) 和轮询 (`requests.get`) 共 5 处调用点 |
+
+**Session 配置**：`pool_connections=10, pool_maxsize=20, max_retries=0`（重试逻辑由应用层的指数退避处理，不由 urllib3 自动重试）。
+
+### 验证结果
+
+| 验证项 | 结果 |
+|--------|------|
+| Gunicorn worker class | `Using worker: gthread` ✓ |
+| Workers 数量 | 4 workers (pids 7, 8, 9, 10) ✓ |
+| `/health/` | `{"status": "ok"}` ✓ |
+| `/health/ready/` | MongoDB/Redis/Qdrant/MinIO 全部 ok ✓ |
+| Web 日志错误 | 无 ✓ |
+| 内存安全 | Web ~4.2GB / 14GB，可用 5GB+ ✓ |
+
+### 涉及的关键文件
+
+| 文件 | 优化相关性 |
+|------|------------|
+| `Dockerfile` | Gunicorn CMD (gthread + workers) |
+| `docker-compose.yml` | web 服务 command |
+| `knowledge_base/rag/llm_client.py` | thread-local requests.Session |
+| `media_app/services.py` | thread-local requests.Session |
+| `memory_bank/concurrency-analysis.md` | 优化方案来源 |
+| `memory_bank/architecture.md` | 并发模型更新 |
+| `progress.md` | 部署进度更新 |
+
+---
+
+## Step 19: Embedding Model ONNX 化 (4.5 方案 a) — COMPLETED (2026-05-15)
+
+### 目标
+将 embedding 模型从 PyTorch SentenceTransformer 替换为 fastembed ONNX Runtime 后端，消除 per-worker 重复加载，减少内存占用。
+
+### 方案 a 可行性调查
+文档假设"Qdrant 原生支持 BGE-M3"——经实测：Qdrant 1.17.1 self-hosted 无 `/inference` API，无 Python 运行时，无服务端推理能力。此假设不成立。
+
+实际采用 fastembed ONNX 后端（与 Qdrant 推荐的 fastembed 一致）：模型从 `BAAI/bge-m3` (PyTorch) 切换为 `intfloat/multilingual-e5-large` (ONNX, 同为 1024-dim，多语言)。知识库当前为空（0 documents），无需重索引。
+
+### 服务器两次卡死根因
+新 ONNX 模型在 **6 个进程**（4 gunicorn workers + celery worker + celery beat）中各自加载，每份 ~2GB，总计 ~12GB，耗尽 14GB 系统内存。原 PyTorch BGE-M3 使用后台线程预加载且部分 worker 可能未成功加载，实际内存较低（~4.2GB），掩盖了此问题。
+
+### 修复措施（3 项）
+
+1. **gunicorn `--preload`**：模型在 master 加载一次，3 workers 通过 fork + COW 共享 → 1 份模型内存
+2. **`EMBEDDING_PRELOAD=true` 环境变量门控**：仅 web 服务预加载；worker/beat 仅文档处理时懒加载
+3. **同步加载**（非后台线程）：确保 gunicorn `--preload` 模式下模型在 fork 前完成加载
+
+### 修改文件
+- `knowledge_base/embedding.py` — 新建，fastembed ONNX embedding 封装
+- `knowledge_base/services.py` — 委托 embedding 操作至 `embedding.py`
+- `knowledge_base/apps.py` — 环境变量门控 + 同步加载
+- `Dockerfile` — `--preload --workers 3`
+- `docker-compose.yml` — web 服务: `EMBEDDING_PRELOAD=true`, `--preload --workers 3`
+- `requirements.txt` — 新增 `fastembed==0.8.0`
+- `.dockerignore` — 新建，排除 `models/`
+
+### 验证结果
+| 指标 | 修复前 | 修复后 | 改善 |
+|------|--------|--------|------|
+| web 容器内存 | 7.77 GB | 3.39 GB | -56% |
+| worker 容器内存 | 2.14 GB | 0.84 GB | -61% |
+| beat 容器内存 | 1.95 GB | 0.68 GB | -65% |
+| 系统总使用 | ~12 GB | ~5.2 GB | -57% |
+| 系统空闲 | 0 MB | 6.0 GB | 安全 |
+| 模型加载时间 | ~9s (PyTorch) | ~2s (ONNX) | -78% |
+| embedding 维度 | 1024 (BGE-M3) | 1024 (e5-large) | 兼容 |
+| 功能正确性 | — | 向量维度 1024, 相似度 0.97 | 正确 |
+| 健康检查 | — | `/health/` + `/health/ready/` ok | 正常 |
+
+### 与原 PyTorch BGE-M3 对比
+| 指标 | PyTorch BGE-M3 (原) | ONNX e5-large (新) |
+|------|---------------------|-------------------|
+| 模型大小 | ~2.3 GB | ~2.1 GB |
+| 加载速度 | ~9s | ~2s |
+| 内存/worker | ~2 GB | ~2 GB (共享) |
+| 后端 | PyTorch | ONNX Runtime |
+| 维度 | 1024 | 1024 |
+| 语言支持 | 多语言 | 多语言 |
+| 预加载方式 | 后台线程 | 同步 (--preload) |
+| 模型份数 | ~6 (全部进程) | 1 (共享) |
+| 系统内存 | ~12 GB | ~5.2 GB |
+| 服务器稳定性 | 正常 | 正常（修复后） |
+
+---
+
+## Step 20: TTS 自动播报默认关闭 + staticfiles 部署修复 — COMPLETED (2026-05-15)
+
+### 目标
+将 TTS 自动播报从默认 ON 改为默认 OFF，关闭自动播放触发点以降低流式播放的前台线程占用，并修复 staticfiles 部署流程中的文件过期问题。
+
+### 问题诊断
+
+**问题 1：自动播放无法关闭**
+- 表面原因：`localStorage` key `dbt_tts_autoplay` 保留了旧值 `"true"`
+- 深层原因：`htmx:afterSwap` 和 SSE stream done 两个回调中均调用了 `autoPlayLatest()`，形成双重触发
+
+**问题 2：staticfiles 部署后仍为旧文件**
+- 根因：Docker 构建阶段的 `collectstatic` 写入镜像内部路径，运行时的 `.:/app` bind mount 覆盖了镜像内文件。nginx 通过 `./staticfiles:/var/www/static:ro` 提供静态文件，该目录从未被 Docker 构建更新
+- 表现：源码 `static/js/media.js` 已修改，但 nginx 提供的 `staticfiles/js/media.js` 仍是旧版本
+
+### 修复措施（4 项）
+
+1. **localStorage key 更换**：`dbt_tts_autoplay` → `dbt_tts_autoplay_v2`，清除所有旧偏好，统一默认关闭
+2. **移除 `htmx:afterSwap` 中的自动播放**：handler 中仅保留 scroll 逻辑，不再调用 `autoPlayLatest()`
+3. **移除 SSE stream done 中的自动播放**：流完成时仅执行 `DBT_Chat.scrollToBottom()`，不再触发播放
+4. **collectstatic 移至容器启动时执行**：`docker-compose.yml` web 服务 command 改为 `sh -c "python manage.py collectstatic --noinput && gunicorn ..."`，确保每次容器启动时静态文件写入宿主机 `./staticfiles/`（通过 bind mount）
+
+### 修改文件
+| 文件 | 改动 |
+|------|------|
+| `static/js/media.js:16` | `AUTO_PLAY_STORAGE_KEY` 改为 `"dbt_tts_autoplay_v2"` |
+| `static/js/media.js:661` | 移除 `htmx:afterSwap` 中的 `autoPlayLatest()` 调用 |
+| `static/js/media.js:778` | 移除 SSE stream done 中的 `autoPlayLatest()` 调用 |
+| `docker-compose.yml:7` | web command 改为先 collectstatic 再 gunicorn |
+
+### 架构决策
+- **手动播放按钮保持不变**：用户始终可点击 🔊 / ⏹ 按钮手动控制播放
+- **`autoPlayLatest()` 函数保留定义但不再被调用**：作为 dead code 保留，便于将来如需恢复自动播放功能时参考
+- **localStorage key 版本化**：新 key 确保所有用户统一从"关闭"状态开始，避免旧偏好残留

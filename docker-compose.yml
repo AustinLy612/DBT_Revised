@@ -4,13 +4,14 @@ services:
   # ── Django web (Gunicorn) ──
   web:
     build: .
-    command: gunicorn dbt_platform.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    command: sh -c "python manage.py collectstatic --noinput && gunicorn dbt_platform.wsgi:application --bind 0.0.0.0:8000 --worker-class gthread --workers 3 --threads 8 --timeout 120 --preload"
     volumes:
       - .:/app
       - ./logs:/app/logs
       - hf_cache:/root/.cache/huggingface
     environment:
       - DJANGO_SETTINGS_MODULE=dbt_platform.settings
+      - EMBEDDING_PRELOAD=true
     env_file:
       - .env
     depends_on:

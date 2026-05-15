@@ -8,6 +8,7 @@ use rather than failing silently.
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -16,6 +17,10 @@ from django.conf import settings
 
 logger = logging.getLogger("dbt_platform.knowledge_base.rag")
 
+# Thread-local session pool — one requests.Session per thread for connection reuse.
+# gthread workers share the same process, so a module-level global is not safe.
+_local = threading.local()
+
 DEFAULT_MODEL = "MiniMax-M2.7"
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 4096
@@ -23,6 +28,20 @@ API_TIMEOUT_SECONDS = 60
 CHAT_ENDPOINT = "/v1/text/chatcompletion_v2"
 MAX_RETRIES = 2
 RETRY_BASE_DELAY = 1.5  # seconds, multiplied by 2^attempt
+
+
+def _get_session() -> requests.Session:
+    """Return a thread-local requests.Session with connection pooling."""
+    if not hasattr(_local, "session"):
+        _local.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=0,
+        )
+        _local.session.mount("https://", adapter)
+        _local.session.mount("http://", adapter)
+    return _local.session
 
 
 class ConfigurationError(RuntimeError):
@@ -101,7 +120,7 @@ def minimax_chat_completion(
 
     for attempt in range(MAX_RETRIES + 1):
         try:
-            resp = requests.post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS)
+            resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS)
         except requests.Timeout:
             last_error = APIError(f"MiniMax API request timed out after {API_TIMEOUT_SECONDS}s")
             if attempt < MAX_RETRIES:
@@ -198,7 +217,7 @@ def minimax_chat_completion_stream(
     logger.debug("MiniMax streaming API call: model=%s, msg_count=%d", model, len(messages))
 
     try:
-        resp = requests.post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
+        resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
     except requests.Timeout:
         raise APIError(f"MiniMax streaming API timed out after {API_TIMEOUT_SECONDS}s")
     except requests.ConnectionError as exc:

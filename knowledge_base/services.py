@@ -10,84 +10,19 @@ from django.db import connections
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
-from sentence_transformers import SentenceTransformer
 
+from . import embedding
 from .models import KnowledgeChunk, KnowledgeDocument, RetrievalLog
 
 logger = logging.getLogger("dbt_platform.knowledge_base")
 
-EMBEDDING_MODEL_NAME = "BAAI/bge-m3"
-EMBEDDING_DIM = 1024
+EMBEDDING_DIM = embedding.EMBEDDING_DIM
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 TOP_K_DEFAULT = 5
 RAG_CACHE_TTL_SECONDS = 300  # 5 minutes
 
-_embedding_model: SentenceTransformer | None = None
 _qdrant_client: QdrantClient | None = None
-
-_embedding_load_failed: bool = False
-_embedding_preload_started: bool = False
-
-
-def preload_embedding_model() -> None:
-    """Preload the embedding model in a background thread at Django startup.
-
-    Safe to call multiple times — only the first call does work.
-    Call this from AppConfig.ready() so the model is warm before the
-    first user request triggers a semantic search.
-    """
-    global _embedding_model, _embedding_load_failed, _embedding_preload_started
-    if _embedding_preload_started or _embedding_load_failed:
-        return
-    _embedding_preload_started = True
-    try:
-        logger.info("Preloading embedding model: %s", EMBEDDING_MODEL_NAME)
-        _embedding_model = SentenceTransformer(
-            EMBEDDING_MODEL_NAME, local_files_only=True
-        )
-        logger.info("Embedding model preloaded successfully: %s", EMBEDDING_MODEL_NAME)
-    except Exception:
-        logger.warning(
-            "Local cache miss for %s during preload, attempting network load.",
-            EMBEDDING_MODEL_NAME,
-        )
-        try:
-            _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-            logger.info("Embedding model loaded via network: %s", EMBEDDING_MODEL_NAME)
-        except Exception:
-            _embedding_load_failed = True
-            logger.exception(
-                "Failed to preload embedding model %s. Semantic search disabled.",
-                EMBEDDING_MODEL_NAME,
-            )
-
-
-def get_embedding_model() -> SentenceTransformer | None:
-    global _embedding_model, _embedding_load_failed
-    if _embedding_load_failed:
-        return None
-    if _embedding_model is None:
-        try:
-            logger.info("Loading embedding model from cache: %s", EMBEDDING_MODEL_NAME)
-            _embedding_model = SentenceTransformer(
-                EMBEDDING_MODEL_NAME, local_files_only=True
-            )
-        except Exception:
-            logger.warning(
-                "Local cache miss for %s, attempting network load via HF_ENDPOINT.",
-                EMBEDDING_MODEL_NAME,
-            )
-            try:
-                _embedding_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-            except Exception:
-                _embedding_load_failed = True
-                logger.exception(
-                    "Failed to load embedding model %s. Semantic search disabled.",
-                    EMBEDDING_MODEL_NAME,
-                )
-                return None
-    return _embedding_model
 
 
 def get_qdrant_client() -> QdrantClient:
@@ -205,12 +140,8 @@ def chunk_text(text: str, metadata: dict | None = None) -> list[dict[str, Any]]:
 
 
 def generate_embeddings(texts: list[str]) -> np.ndarray:
-    """Generate embeddings for a list of texts. Returns empty array if model unavailable."""
-    model = get_embedding_model()
-    if model is None:
-        logger.warning("Embedding model not available, returning zeros")
-        return np.zeros((len(texts), EMBEDDING_DIM), dtype=np.float32)
-    return model.encode(texts, normalize_embeddings=True)
+    """Generate embeddings for a list of texts. Delegates to fastembed (ONNX runtime)."""
+    return embedding.generate_embeddings(texts)
 
 
 def ensure_qdrant_collection() -> None:
@@ -349,12 +280,10 @@ def _keyword_search_regex(
 def semantic_search(query: str, top_k: int = TOP_K_DEFAULT) -> list[dict[str, Any]]:
     """Search chunks by semantic similarity using Qdrant.
     Falls back to empty results if the embedding model is unavailable."""
-    model = get_embedding_model()
-    if model is None:
+    query_vector = embedding.embed_query(query)
+    if not query_vector.any():
         logger.warning("Semantic search skipped: embedding model not available")
         return []
-
-    query_vector = model.encode([query], normalize_embeddings=True)[0].tolist()
 
     client = get_qdrant_client()
     collection_name = settings.QDRANT_COLLECTION
@@ -362,7 +291,7 @@ def semantic_search(query: str, top_k: int = TOP_K_DEFAULT) -> list[dict[str, An
 
     results = client.query_points(
         collection_name=collection_name,
-        query=query_vector,
+        query=query_vector.tolist(),
         limit=top_k,
     )
 

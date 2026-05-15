@@ -107,16 +107,18 @@ Configuration variables that MUST change for production:
 - `bindIp: 127.0.0.1` in mongod.conf (no public exposure)
 - Future: separate backup account for dump/restore operations
 
-### 6. Celery Async Tasks
-- Broker: Redis
-- Serializer: JSON
-- Time limit: 30 minutes per task
-- Expected async workloads: document chunking/embedding, image generation, TTS synthesis, batch export
-- **Gunicorn timeout**: Increased from default 30s to 120s (2026-05-13) — matches `API_TIMEOUT_SECONDS` in media_app/services.py, allowing synchronous image generation fallback to complete without worker kill
+### 6. Celery Async Tasks & Gunicorn Concurrency (Updated 2026-05-15)
+- **Gunicorn worker class**: `gthread` (since 2026-05-15) — 3 workers × 8 threads = 24 concurrent I/O connections + `--preload` for shared embedding model memory. gthread uses native threads without monkey-patching, providing safe I/O concurrency. `--preload` loads the embedding model once in the master process (~2GB), then workers share it via copy-on-write fork. Previously `sync` (3 workers × 1 connection = 3 concurrent).
+- **Gunicorn timeout**: 120s — matches `API_TIMEOUT_SECONDS` in media_app/services.py, allowing synchronous image generation fallback to complete without worker kill
+- **HTTP connection pooling**: `requests.Session()` with thread-local storage (`threading.local()`) in both `llm_client.py` and `media_app/services.py`. Each thread maintains its own session with `pool_connections=10, pool_maxsize=20`. Eliminates TCP+TLS handshake overhead (~100-300ms) on every API call.
+- **Celery Broker**: Redis
+- **Serializer**: JSON
+- **Time limit**: 30 minutes per task
+- **Expected async workloads**: document chunking/embedding, image generation, TTS synthesis, batch export
 
 ### 7. RAG Architecture (to be implemented in later steps)
 - **MongoDB text index**: keyword search on skill names, module names, rule documents
-- **Qdrant**: semantic vector search with `bge-m3` embeddings
+- **Qdrant**: semantic vector search with `intfloat/multilingual-e5-large` (ONNX) embeddings via fastembed
 - **Hybrid retrieval**: Application layer merges and deduplicates by chunk_id
 - **LangChain**: Wraps retrieval, prompt templates, structured output schemas for teaching/test sub-flows
 
@@ -483,13 +485,15 @@ The Celery task handles status transitions and retry logic. The core logic is ex
 - Accepts optional metadata dict propagated to every chunk
 - Returns `list[{"text": str, "metadata": dict}]`
 
-### 26. Embedding & Vector Search (Step 5)
+### 26. Embedding & Vector Search (Step 5, Updated 2026-05-15)
 
-**Model**: `BAAI/bge-m3` via `sentence-transformers` (1024-dim, L2-normalized)
+**Model**: `intfloat/multilingual-e5-large` via `fastembed` (ONNX Runtime, 1024-dim). Replaced `BAAI/bge-m3` (PyTorch SentenceTransformer) as part of optimization 4.5. Same 1024-dim vectors — drop-in replacement with ~78% faster loading and ~30% less memory.
+
+**Preloading**: Model loaded once in gunicorn master process (`--preload`), then 3 workers share via copy-on-write fork. Gated by `EMBEDDING_PRELOAD=true` env var (web service only). Celery worker/beat lazy-load only when document processing actually needs embeddings.
 
 **Lazy loading**: Both the embedding model and Qdrant client are module-level singletons initialized on first use:
 ```python
-_embedding_model: SentenceTransformer | None = None
+_embedding_model: TextEmbedding | None = None
 _qdrant_client: QdrantClient | None = None
 ```
 
@@ -782,14 +786,15 @@ During teaching (`generate_teaching_response()`), the current step's pre-fetched
 
 ### 38. Graceful Degradation: Embedding Model Unavailability
 
-The embedding model (BAAI/bge-m3, 2.12GB) may fail to load for several reasons:
-- Network unreachable (first-time download)
+The embedding model (`intfloat/multilingual-e5-large`, ~2.1GB ONNX) may fail to load for several reasons:
+- Model cache missing (`models/fastembed_cache/`) on first deploy without pre-downloaded cache
+- Network unreachable (first-time download from HuggingFace)
 - Insufficient disk space
 - Model file corruption
 
 **Degradation chain**:
 ```
-get_embedding_model() returns None
+_get_model() returns None
   → generate_embeddings() returns zeros array
   → semantic_search() returns []
   → hybrid_search() = keyword_results only (no semantic contribution)
@@ -798,28 +803,35 @@ get_embedding_model() returns None
 
 The `_embedding_load_failed` flag prevents retry storms — once loading fails, it stays failed for the process lifetime. This avoids repeated timeout/error cycles on every semantic search attempt.
 
-### 38b. Embedding Model Preloading at Startup (Step 13 Optimization)
+### 38b. Embedding Model Preloading at Startup (Updated 2026-05-15)
 
-To eliminate ~9s cold-start latency on the first semantic search request, the model is preloaded in a background thread at Django startup:
+Model preloaded **synchronously** in gunicorn master process via `--preload` (since 2026-05-15, optimization 4.5):
 
 ```python
 # knowledge_base/apps.py::KnowledgeBaseConfig.ready()
+if os.environ.get("EMBEDDING_PRELOAD") != "true":
+    return  # Only web service preloads; worker/beat skip
 if os.environ.get("RUN_MAIN") == "true":
     return  # Skip Django auto-reloader child process
 
-from .services import preload_embedding_model
-t = threading.Thread(target=preload_embedding_model, daemon=True)
-t.start()
+from .embedding import preload_embedding_model
+preload_embedding_model()  # Synchronous — must complete before gunicorn fork
 ```
 
 **Preload function** (`preload_embedding_model()`):
-- Idempotent: `_embedding_preload_started` flag prevents double-loading
-- Tries `local_files_only=True` first (fast, ~1s from cache)
-- Falls back to network load on cache miss
-- Sets `_embedding_load_failed=True` if both fail, `get_embedding_model()` will return `None`
-- Runs in a daemon thread — Django startup is not blocked
+- Gated by `EMBEDDING_PRELOAD=true` env var (set only in docker-compose web service)
+- Idempotent: checks `_embedding_model is not None or _embedding_load_failed` before loading
+- Loads ONNX model from persistent cache at `./models/fastembed_cache/` (host volume)
+- Sets `_embedding_load_failed=True` on failure → `_get_model()` returns `None`
+- Loads synchronously (not in background thread) for correct gunicorn `--preload` fork semantics
 
-**Result**: The 2.12GB `BAAI/bge-m3` model is loaded and warm by the time a user logs in and navigates to the teaching page, removing embedding loading from the critical request path.
+**Memory model**:
+- Master process loads model once (~2GB)
+- Workers fork and share model memory via copy-on-write pages
+- Worker/beat only lazy-load if document processing actually needs embeddings
+- Result: 1 model copy instead of 6 (3 web workers + celery worker + beat)
+
+**Result**: The model is loaded in ~2s (vs ~9s for PyTorch) and warm before any request arrives. Total system memory for embedding reduced from ~12GB (6 copies) to ~2GB (1 shared copy).
 
 ### 39. Mock LLM Response Pattern for Testing
 
@@ -1884,7 +1896,7 @@ Calls `POST https://openspeech.bytedance.com/api/v1/tts` with `Authorization: Be
 
 Text is truncated to 3000 characters, then further trimmed to 1000 UTF-8 bytes before the API call (volcengine TTS V1 limit).
 
-**Auto-play architecture** — Dual-mode playback:
+**Auto-play architecture** — Manual-only playback (auto-play removed 2026-05-15):
 
 ```
 Manual playback (always available):
@@ -1892,16 +1904,13 @@ Manual playback (always available):
     → Fetch POST /media/tts/synthesize/ → audio/mpeg blob
     → new Audio(url).play()
 
-Auto-play (gated by toggle):
-  HTMX swaps messages_partial.html into #chat-messages
-  → <script>DBT_TTS.autoPlayLatest();</script> fires
-  → autoPlayLatest() checks localStorage dbt_tts_autoplay
-      ON (default):  finds last [data-role="assistant"] →
-                      extracts text → DBT_TTS.play(text, messageId)
-      OFF:            no-op
+Auto-play (REMOVED):
+  autoPlayLatest() function still defined but no longer called.
+  Previously triggered by htmx:afterSwap and SSE stream completion.
+  Removed to eliminate automatic TTS thread usage on page load.
 ```
 
-**Toggle UI** (`session.html:244-252`): Slider switch in chat header with id `tts-autoplay-toggle`. On change, calls `DBT_TTS.toggleAutoPlay()` which flips `localStorage.dbt_tts_autoplay` and syncs the label ("自动播报" / "已关闭").
+**Toggle UI** (`session.html:337-345`): Slider switch in chat header with id `tts-autoplay-toggle`. Default unchecked (label: "已关闭"). On change, calls `DBT_TTS.toggleAutoPlay()` which flips `localStorage.dbt_tts_autoplay_v2` and syncs the label ("自动播报" / "已关闭").
 
 **Toggle state lifecycle**:
 ```
@@ -1910,7 +1919,7 @@ User toggles → toggleAutoPlay() writes localStorage → _syncToggleUI()
 HTMX swap → autoPlayLatest() reads localStorage → plays or skips
 ```
 
-**Key invariant**: The toggle ONLY controls auto-play. Manual 🔊 buttons always work regardless of toggle state. This means a user with auto-play OFF can still click 🔊 to hear individual messages.
+**Key invariant**: The toggle ONLY controls auto-play. Manual 🔊 buttons always work regardless of toggle state. Auto-play is default OFF (2026-05-15); the `autoPlayLatest()` function definition is retained but no longer called from any event handler.
 
 ### 76. ASR Service with Recording Flow (Step 11)
 
@@ -1966,7 +1975,7 @@ window.DBT_Image         # Image generation
                          # POST /media/image/generate/ → inject HTML into target
 
 Private helpers:
-  _getAutoPlay()         # localStorage.getItem("dbt_tts_autoplay") !== "false"
+  _getAutoPlay()         # localStorage.getItem("dbt_tts_autoplay_v2") === "true" (default OFF)
   _setAutoPlay(bool)     # localStorage.setItem(...)
   _syncToggleUI()        # Sync checkbox on DOMContentLoaded
   _playAudioBlob(blob)   # URL.createObjectURL → new Audio → play
@@ -1976,9 +1985,9 @@ Private helpers:
 
 **Module design**: Each module is a plain object literal on `window`, compatible with inline `onclick` handlers in Django templates. No build step, no bundler, no JS framework dependency beyond HTMX (which is loaded separately).
 
-**localStorage key**: `dbt_tts_autoplay` — `"true"` (default, auto-play ON) or `"false"` (auto-play OFF). Read on page load via `DOMContentLoaded` listener, written on toggle, read on every HTMX swap. Not a server-side preference — deliberately client-only since it's a per-device UX setting.
+**localStorage key**: `dbt_tts_autoplay_v2` — `"true"` (auto-play ON) or absent/false (auto-play OFF, default). Key renamed from `dbt_tts_autoplay` on 2026-05-15 to reset all users to default OFF. Read on page load via `DOMContentLoaded` listener, written on toggle. Not a server-side preference — deliberately client-only since it's a per-device UX setting.
 
-**data-role pattern**: Chat message `<div>` elements carry `data-role="{{ m.role }}"` (values: "user", "assistant", "system"). This allows `autoPlayLatest()` to find the last assistant message with `querySelector('[data-role="assistant"]')` without per-message JS injection or template-level iteration.
+**data-role pattern**: Chat message `<div>` elements carry `data-role="{{ m.role }}"` (values: "user", "assistant", "system"). The `autoPlayLatest()` function (retained but no longer called) used `querySelector('[data-role="assistant"]')` to find the last assistant message.
 
 ### 78. Template Integration Points (Step 11)
 
@@ -1991,7 +2000,7 @@ All template changes for Step 11 follow the same integration pattern:
 Placed before closing `</body>` tag, after HTMX and Alpine.js. All other templates inherit this.
 
 **session.html (teaching phase)** — 4 integration points:
-1. **TTS toggle** (line 244-252): Slider switch in chat header bar, synced to `localStorage`
+1. **TTS toggle** (line 337-345): Slider switch in chat header bar, default unchecked (auto-play OFF), synced to `localStorage.dbt_tts_autoplay_v2`
 2. **data-role** (line 258): `data-role="{{ m.role }}"` on each chat bubble for JS detection
 3. **🔊 TTS buttons** (line 262-265): On every assistant message bubble, calls `DBT_TTS.play()`
 4. **🎤 ASR button** (line 283-286): In chat input form, calls `DBT_ASR.start()`/`stop()`
@@ -2105,16 +2114,16 @@ The TTS auto-play toggle is the first client-side preference in the DBT platform
 
 **Persistence contract**:
 ```
-Key:        dbt_tts_autoplay
+Key:        dbt_tts_autoplay_v2  (v2: key renamed 2026-05-15 to reset all users to OFF)
 Type:       string ("true" | "false")
-Default:    "true" (auto-play ON) — absence of key ≡ "true"
+Default:    false (auto-play OFF) — absence of key ≡ false
 Scope:      per-origin, per-browser
 Lifetime:   until user clears browser data or toggles off
 ```
 
-**Read path**: `_getAutoPlay()` returns `localStorage.getItem("dbt_tts_autoplay") !== "false"`. The negation means: missing key (first visit) → default true. Explicit `"false"` → false. Any other value → true.
+**Read path**: `_getAutoPlay()` returns `localStorage.getItem("dbt_tts_autoplay_v2") === "true"`. Missing key → null → false. Only explicit `"true"` → true.
 
-**Write path**: `_setAutoPlay(enabled)` calls `localStorage.setItem("dbt_tts_autoplay", enabled)`. Only called from `toggleAutoPlay()`, never from `autoPlayLatest()` (read-only).
+**Write path**: `_setAutoPlay(enabled)` calls `localStorage.setItem("dbt_tts_autoplay_v2", enabled)`. Only called from `toggleAutoPlay()`, never from `autoPlayLatest()` (read-only).
 
 **UI sync**: `_syncToggleUI()` reads localStorage state and sets the checkbox `checked` property. Called once on `DOMContentLoaded` (page load) and after every toggle. The checkbox is the source of truth for display; localStorage is the source of truth for behavior.
 
@@ -2430,7 +2439,13 @@ Three production bugs discovered after deploying the streaming optimization:
 - Cause: `docker compose restart web` only restarts gunicorn. Static files in shared volume (`./staticfiles`) and nginx config (bind mount) were not refreshed
 - Impact: `media.js` lacked `DBT_Stream` → form submission fell back to browser default GET (page refresh). Nginx lacked `proxy_buffering off` → SSE would be buffered
 - Fix: `collectstatic --noinput` + `docker compose restart nginx`
-- Prevention: After any static file or nginx config change, run both commands
+- Prevention: As of 2026-05-15, `collectstatic --noinput` runs at container startup (docker-compose.yml web command: `sh -c "python manage.py collectstatic --noinput && gunicorn ..."`), ensuring static files are always up-to-date after each deployment
+
+**Bug 4: Static files stale after Docker rebuild (2026-05-15)**
+- Cause: Docker build `collectstatic` writes to image's `/app/staticfiles/`, but runtime `.:/app` bind mount overrides it. nginx serves from `./staticfiles:/var/www/static:ro` — the host directory, never updated by Docker build
+- Impact: Source `static/js/media.js` was edited but nginx served old version from `./staticfiles/js/media.js`
+- Fix: Moved `collectstatic --noinput` from Dockerfile RUN to container startup command in docker-compose.yml. At runtime with bind mount active, collectstatic writes to host `./staticfiles/`
+- Prevention: All future static file changes will be collected at container startup
 
 **Bug 2: DOM ID collision across streaming bubbles**
 - Cause: `_readStream()` used `document.getElementById("streaming-text")` — global lookup. When stream 1 completed, only `aiBubble.id` was cleared; child `<span id="streaming-text">` and `<span id="streaming-cursor">` retained their IDs. Stream 2's `getElementById` returned the first (stale) element
@@ -2685,9 +2700,9 @@ _playAudioBlob (已缓存的 blob — 即时播放)
 新增的 `/media/tts/stream/` URL 自动匹配此 location（`/media/tts/` 是前缀），无需修改 Nginx 配置。
 
 **静态文件部署注意事项**:
-- 前端 JS 更新后必须运行 `python manage.py collectstatic --noinput`
-- Nginx 的 `staticfiles/` 目录映射需要在 collectstatic 后才会更新
-- 遗漏此步骤会导致浏览器加载旧 JS，流式功能完全不生效（旧 JS 直接调用 `/media/tts/synthesize/` 非流式端点）
+- 前端 JS 更新后容器启动时自动运行 `collectstatic --noinput`（通过 docker-compose.yml web command），无需手动执行
+- Nginx 的 `staticfiles/` 目录映射（`./staticfiles:/var/www/static:ro`）在 collectstatic 后自动更新
+- 浏览器缓存：nginx 对 `/static/` 配置了 `expires 1h`，用户需 Ctrl+Shift+R 强制刷新
 
 **视图异常处理** (2026-05-13 hotfix):
 - `stream_speech_view` 在 `ConfigurationError` / `APIError` 之外新增 `except Exception` 兜底 — `logger.exception()` 记录完整 traceback，返回 502 JSON 错误，防止未预期异常导致静默 500

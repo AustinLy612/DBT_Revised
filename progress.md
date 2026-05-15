@@ -1,6 +1,6 @@
 # DBT Platform — 部署进度
 
-> 最后更新: 2026-05-09
+> 最后更新: 2026-05-15
 
 ## 已完成配置
 
@@ -120,6 +120,111 @@
 - **`templates/teaching/session.html`** — 语音播报开关默认开启且可正常关闭；发送后自动清空输入框 + 自动滚到底部
 - **`templates/teaching/messages_partial.html`** — 移除重复的 autoPlayLatest 调用
 - **`static/js/media.js`** — 新增 `DBT_Chat.scrollToBottom()`
+
+### 并发优化: 优先级 0 — Gunicorn gthread + workers 调整 + HTTP 连接池复用 (2026-05-15)
+
+基于 `memory_bank/concurrency-analysis.md` 的 4.1、4.2、4.3 三项：
+
+#### 4.1 Gunicorn 异步 Worker (gthread)
+- **方案选择**: 采用 gthread（gevent 的安全替代），无需 monkey-patching，兼容性好
+- **配置**: `--worker-class gthread --workers 4 --threads 8 --timeout 120`
+- **效果**: I/O 并发从 3 (sync) 提升至 32 (4 workers × 8 threads)，每个 worker 在等待 I/O 时线程可切换处理其他请求
+- **修改文件**:
+  - `Dockerfile:29` — CMD 改为 gthread
+  - `docker-compose.yml:7` — web 服务 command 同步更新
+
+#### 4.2 Workers 数量调整 (3 → 4)
+- **依据**: 实测 `docker stats` 确认服务器 14GB 总内存，web 容器 2.7GB（3 workers），可用内存 5GB+
+- **调整**: workers 从 3 增加到 4（+1 worker ≈ +200-400MB 内存），仍在安全范围内
+- **验证**: 重启后 web 容器内存 4.2GB，系统可用内存 5GB+，无 OOM 风险
+
+#### 4.3 HTTP 连接池复用 (requests.Session)
+- **方案**: 使用 `threading.local()` 实现线程安全的 per-thread Session（适配 gthread 多线程环境）
+- **配置**: `pool_connections=10, pool_maxsize=20`
+- **效果**: 每次 API 调用减少 TCP+TLS 握手开销 ~100-300ms
+- **修改文件**:
+  - `knowledge_base/rag/llm_client.py` — 新增 `_local` / `_get_session()`，替换 `requests.post()` → `_get_session().post()`
+  - `media_app/services.py` — 同上，覆盖 MiniMax Image、Volcengine TTS（含流式）、Volcengine ASR 提交+轮询共 5 处调用点
+
+#### 验证结果
+- Gunicorn 日志确认: `Using worker: gthread`，4 workers 正常启动
+- `/health/` 和 `/health/ready/` 均返回 `{"status": "ok"}`
+- 所有 4 个后端 (MongoDB/Redis/Qdrant/MinIO) 健康检查通过
+- web 日志无错误
+
+### 优化: Embedding 模型 ONNX 化 (4.5 方案 a) — 2026-05-15
+
+基于 `memory_bank/concurrency-analysis.md` 4.5 方案 A，将 embedding 模型从 PyTorch SentenceTransformer 替换为 fastembed ONNX Runtime 后端。
+
+#### 背景
+- 原方案使用 `BAAI/bge-m3` 通过 SentenceTransformer (PyTorch) 加载，每进程驻留 ~2GB
+- 经调查：Qdrant 1.17.1 self-hosted **无服务端推理能力**（无 `/inference` API、无 Python 运行时），方案 A 原假设"Qdrant 原生支持 BGE-M3"不成立
+- 替代方案：使用 fastembed 的 ONNX 后端（与 Qdrant 推荐的 fastembed 一致），在应用层加载 ONNX 模型
+
+#### 模型切换
+- **原模型**: `BAAI/bge-m3` (PyTorch, ~2GB/进程)
+- **新模型**: `intfloat/multilingual-e5-large` (ONNX, 1024-dim)
+- **兼容性**: 同为 1024 维向量，多语言（中文+英文），无需改 Qdrant collection schema
+- **知识库**: 当前为空（0 documents），无需重索引
+
+#### 内存爆炸与修复（两次服务器卡死）
+
+**第一次部署（失败）**：
+- `docker compose build web` 仅构建了 web 镜像，worker/beat 未重建
+- 新 web 启动后，所有 4 个 gunicorn worker + worker + beat **共 6 个进程各自加载 ONNX 模型**（每份 ~2GB）
+- 总内存：web 7.77GB + worker 2.14GB + beat 1.95GB ≈ **12GB**，系统 14GB 被耗尽 → **服务器卡死**
+
+**第二次部署（同样失败）**：
+- `docker compose build` 构建了全部镜像
+- 但同样的问题：6 个进程各自加载模型 → 再次 OOM → 服务器卡死
+
+**根因分析**：
+1. `apps.py` 的 `preload_embedding_model()` 对**所有** Django 进程（web workers + celery worker + celery beat）都触发预加载
+2. 原 PyTorch BGE-M3 使用后台线程预加载，部分 worker 可能未成功加载（导致之前只有 4.2GB）
+3. ONNX 模型加载更快更可靠，**所有 6 个进程全部成功加载** → 6 × 2GB ≈ 12GB
+4. ONNX 模型的 `model.onnx_data` 使用外部数据格式，每份进程独立加载权重到内存
+
+**最终修复（三项措施）**：
+
+1. **gunicorn `--preload`**（Dockerfile + docker-compose.yml）
+   - 模型在 gunicorn master 进程中加载一次，然后 fork 3 个 worker
+   - Workers 通过 copy-on-write 共享模型内存页 → 仅 1 份模型内存（~2GB）
+   - workers 4→3（配合 preload，3 workers 足够覆盖 I/O 并发）
+
+2. **环境变量门控 `EMBEDDING_PRELOAD=true`**（apps.py + docker-compose.yml）
+   - 仅在 web 服务设置此环境变量
+   - Worker/beat **不预加载模型** — 仅在真正需要做文档处理时才懒加载
+   - Worker 内存从 2.14GB → 0.84GB（-61%）
+   - Beat 内存从 1.95GB → 0.68GB（-65%）
+
+3. **同步加载**（apps.py）
+   - `preload_embedding_model()` 改为同步调用（非后台线程）
+   - 确保 `--preload` 模式下模型在 fork 前完成加载
+
+#### 修改文件
+- `knowledge_base/embedding.py` — 新建，fastembed ONNX embedding 封装
+- `knowledge_base/services.py` — 委托 embedding 操作至 `embedding.py`
+- `knowledge_base/apps.py` — 环境变量门控 + 同步加载
+- `Dockerfile` — `--preload --workers 3`
+- `docker-compose.yml` — web 服务: `EMBEDDING_PRELOAD=true`, `--preload --workers 3`
+- `requirements.txt` — 新增 `fastembed==0.8.0`
+- `.dockerignore` — 新建，排除 `models/`（避免模型缓存打入镜像）
+
+#### 验证结果
+| 指标 | 修复前 | 修复后 | 改善 |
+|------|--------|--------|------|
+| web 容器内存 | 7.77 GB | 3.39 GB | **-56%** |
+| worker 容器内存 | 2.14 GB | 0.84 GB | **-61%** |
+| beat 容器内存 | 1.95 GB | 0.68 GB | **-65%** |
+| 系统总使用 | ~12 GB | ~5.2 GB | **-57%** |
+| 系统空闲 | 0 MB | 6.0 GB | 安全 |
+| embedding 维度 | 1024 (BGE-M3) | 1024 (multilingual-e5) | 兼容 |
+| 模型加载时间 | ~9s (PyTorch) | ~2s (ONNX) | **-78%** |
+
+- `/health/` 和 `/health/ready/` 均返回 `{"status": "ok"}`
+- 所有 4 个后端健康检查通过
+- 功能测试：embedding 向量维度正确 (1024)，同语义文本相似度 0.97
+- 模型缓存于 `./models/fastembed_cache/`（宿主机持久化，跨重建保留）
 
 ### 功能变更: report_viewer 权限升级 (2026-05-09)
 - **改动**: `reports/views.py` — `report_viewer` 角色现在可查看**所有**学生的报告并导出 PDF

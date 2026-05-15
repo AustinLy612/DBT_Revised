@@ -28,6 +28,7 @@ Django==6.0.5
 django-environ==0.13.0
 django-htmx==1.27.0
 django-mongodb-backend==6.0.3
+fastembed==0.8.0
 dnspython==2.8.0
 et_xmlfile==2.0.0
 exceptiongroup==1.3.1

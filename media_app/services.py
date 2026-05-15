@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -16,6 +17,23 @@ import requests
 from django.conf import settings
 
 logger = logging.getLogger("dbt_platform.media_app")
+
+# Thread-local session pool — one requests.Session per thread for connection reuse.
+_local = threading.local()
+
+
+def _get_session() -> requests.Session:
+    """Return a thread-local requests.Session with connection pooling."""
+    if not hasattr(_local, "session"):
+        _local.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=0,
+        )
+        _local.session.mount("https://", adapter)
+        _local.session.mount("http://", adapter)
+    return _local.session
 
 # ── Redis TTS cache ──
 _redis_client = None
@@ -184,7 +202,7 @@ def generate_image(
 
 	for attempt in range(max_retries + 1):
 		try:
-			resp = requests.post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS)
+			resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS)
 		except requests.Timeout:
 			last_error = APIError(f"MiniMax image API timed out after {API_TIMEOUT_SECONDS}s")
 			if attempt < max_retries:
@@ -342,7 +360,7 @@ def synthesize_speech(
 	)
 
 	try:
-		resp = requests.post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
+		resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
 	except requests.Timeout:
 		raise APIError(f"Volcengine TTS V3 timed out after {API_TIMEOUT_SECONDS}s")
 	except requests.ConnectionError as exc:
@@ -493,7 +511,7 @@ def stream_synthesize_speech(
 	)
 
 	try:
-		resp = requests.post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
+		resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
 	except requests.Timeout:
 		raise APIError(f"Volcengine TTS V3 timed out after {API_TIMEOUT_SECONDS}s")
 	except requests.ConnectionError as exc:
@@ -609,7 +627,7 @@ def transcribe_audio(
 
 	# Step 1: Submit audio
 	try:
-		resp = requests.post(
+		resp = _get_session().post(
 			f"{VOLCENGINE_ASR_HOST}/api/v1/vc/submit",
 			data=audio_bytes,
 			headers=headers,
@@ -642,7 +660,7 @@ def transcribe_audio(
 	for attempt in range(ASR_POLL_MAX_RETRIES):
 		_time.sleep(ASR_POLL_INTERVAL)
 		try:
-			poll_resp = requests.get(
+			poll_resp = _get_session().get(
 				f"{VOLCENGINE_ASR_HOST}/api/v1/vc/query",
 				params={"id": job_id},
 				headers={
