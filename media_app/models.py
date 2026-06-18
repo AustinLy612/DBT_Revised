@@ -10,7 +10,7 @@ from django.db import models
 
 
 class ImageGenerationLog(models.Model):
-    """Metadata log for MiniMax image generation calls.
+    """Metadata log for image generation calls.
 
     Image files are NOT persisted — temporary_url expires.
     """
@@ -26,7 +26,7 @@ class ImageGenerationLog(models.Model):
         "accounts.User", on_delete=models.CASCADE, related_name="image_generations"
     )
     prompt = models.TextField()
-    model = models.CharField(max_length=64, default="image-01")
+    model = models.CharField(max_length=64, default="jimeng_t2i_v31")
     temporary_image_url = models.TextField(blank=True, default="")
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.SUCCESS

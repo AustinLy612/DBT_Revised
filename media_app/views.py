@@ -33,7 +33,7 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
 
     POST params:
         prompt: Image description text.
-        model: Optional model ID (default: image-01).
+        model: Optional model ID (default: jimeng_t2i_v31).
         source: "teaching_scene" | "test_illustration" | "manual"
         session_id: Optional teaching session ID.
         test_question_id: Optional test question ID.

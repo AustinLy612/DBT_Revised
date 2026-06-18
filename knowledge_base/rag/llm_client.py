@@ -1,6 +1,6 @@
-"""MiniMax LLM client wrapper.
+"""DeepSeek LLM client wrapper.
 
-Provides a clean interface for calling MiniMax chat completions with
+Provides a clean interface for calling DeepSeek chat completions with
 structured output support.  The client is safe to instantiate even when
 no API key is configured — it raises a clear ConfigurationError on first
 use rather than failing silently.
@@ -21,11 +21,11 @@ logger = logging.getLogger("dbt_platform.knowledge_base.rag")
 # gthread workers share the same process, so a module-level global is not safe.
 _local = threading.local()
 
-DEFAULT_MODEL = "MiniMax-M2.7"
+DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 4096
-API_TIMEOUT_SECONDS = 60
-CHAT_ENDPOINT = "/v1/text/chatcompletion_v2"
+API_TIMEOUT_SECONDS = 120
+CHAT_ENDPOINT = "/v1/chat/completions"
 MAX_RETRIES = 2
 RETRY_BASE_DELAY = 1.5  # seconds, multiplied by 2^attempt
 
@@ -45,40 +45,40 @@ def _get_session() -> requests.Session:
 
 
 class ConfigurationError(RuntimeError):
-    """Raised when the MiniMax client is not properly configured."""
+    """Raised when the DeepSeek client is not properly configured."""
 
 
 class APIError(RuntimeError):
-    """Raised when the MiniMax API returns an error."""
+    """Raised when the DeepSeek API returns an error."""
 
 
 def _get_api_key() -> str:
-    key = settings.MINIMAX_API_KEY
+    key = settings.DEEPSEEK_API_KEY
     if not key:
         raise ConfigurationError(
-            "MINIMAX_API_KEY is not set. Configure it in .env to use RAG capabilities."
+            "DEEPSEEK_API_KEY is not set. Configure it in .env to use RAG capabilities."
         )
     return key
 
 
 def _get_base_url() -> str:
-    return settings.MINIMAX_BASE_URL.rstrip("/")
+    return settings.DEEPSEEK_BASE_URL.rstrip("/")
 
 
-def minimax_chat_completion(
+def chat_completion(
     messages: list[dict[str, str]],
     *,
     model: str = DEFAULT_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    reply_format: str | None = None,
+    response_format: dict[str, str] | None = None,
     extra_body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Call MiniMax ChatCompletion API and return the first choice message.
+    """Call DeepSeek ChatCompletion API and return the first choice message.
 
     Args:
         messages: List of {"role": "...", "content": "..."} dicts.
-        model: MiniMax model ID.
+        model: DeepSeek model ID.
         temperature: Sampling temperature (0-1, lower = more deterministic).
         max_tokens: Maximum output tokens.
         response_format: Optional {"type": "json_object"} for JSON mode.
@@ -88,7 +88,7 @@ def minimax_chat_completion(
         Dict with keys: "role", "content", "finish_reason", "usage".
 
     Raises:
-        ConfigurationError: If MINIMAX_API_KEY is not set.
+        ConfigurationError: If DEEPSEEK_API_KEY is not set.
         APIError: If the API returns an error or non-200 status.
     """
     api_key = _get_api_key()
@@ -100,11 +100,10 @@ def minimax_chat_completion(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "mask_sensitive_info": True,
     }
 
-    if reply_format is not None:
-        body["reply_format"] = reply_format
+    if response_format is not None:
+        body["response_format"] = response_format
 
     if extra_body is not None:
         body.update(extra_body)
@@ -114,7 +113,7 @@ def minimax_chat_completion(
         "Content-Type": "application/json",
     }
 
-    logger.debug("MiniMax API call: model=%s, msg_count=%d", model, len(messages))
+    logger.debug("DeepSeek API call: model=%s, msg_count=%d", model, len(messages))
 
     last_error: Exception | None = None
 
@@ -122,31 +121,31 @@ def minimax_chat_completion(
         try:
             resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS)
         except requests.Timeout:
-            last_error = APIError(f"MiniMax API request timed out after {API_TIMEOUT_SECONDS}s")
+            last_error = APIError(f"DeepSeek API request timed out after {API_TIMEOUT_SECONDS}s")
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
-                logger.warning("MiniMax timeout, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, MAX_RETRIES)
+                logger.warning("DeepSeek timeout, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, MAX_RETRIES)
                 time.sleep(delay)
                 continue
             raise last_error
         except requests.ConnectionError as exc:
-            last_error = APIError(f"MiniMax API connection failed: {exc}")
+            last_error = APIError(f"DeepSeek API connection failed: {exc}")
             last_error.__cause__ = exc
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
-                logger.warning("MiniMax connection error, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, MAX_RETRIES)
+                logger.warning("DeepSeek connection error, retrying in %.1fs (attempt %d/%d)", delay, attempt + 1, MAX_RETRIES)
                 time.sleep(delay)
                 continue
             raise last_error
 
-        # Retry on transient HTTP errors (529 overload, 502/503 server errors)
-        if resp.status_code in (529, 502, 503):
+        # Retry on transient HTTP errors (502/503 server errors, 529 overload)
+        if resp.status_code in (429, 502, 503, 529):
             error_detail = _extract_error(resp)
-            last_error = APIError(f"MiniMax API returned {resp.status_code}: {error_detail}")
+            last_error = APIError(f"DeepSeek API returned {resp.status_code}: {error_detail}")
             if attempt < MAX_RETRIES:
                 delay = RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning(
-                    "MiniMax transient error %s, retrying in %.1fs (attempt %d/%d)",
+                    "DeepSeek transient error %s, retrying in %.1fs (attempt %d/%d)",
                     resp.status_code, delay, attempt + 1, MAX_RETRIES,
                 )
                 time.sleep(delay)
@@ -155,7 +154,7 @@ def minimax_chat_completion(
 
         if resp.status_code != 200:
             raise APIError(
-                f"MiniMax API returned {resp.status_code}: {_extract_error(resp)}"
+                f"DeepSeek API returned {resp.status_code}: {_extract_error(resp)}"
             )
 
         data = resp.json()
@@ -164,7 +163,7 @@ def minimax_chat_completion(
     raise last_error  # type: ignore[misc]
 
 
-def minimax_chat_completion_stream(
+def chat_completion_stream(
     messages: list[dict[str, str]],
     *,
     model: str = DEFAULT_MODEL,
@@ -172,7 +171,7 @@ def minimax_chat_completion_stream(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     extra_body: dict[str, Any] | None = None,
 ):
-    """Stream MiniMax ChatCompletion and yield content deltas via SSE.
+    """Stream DeepSeek ChatCompletion and yield content deltas via SSE.
 
     Yields each incremental content chunk as a plain string. The final
     yield is the full accumulated text (so callers can parse it for
@@ -180,7 +179,7 @@ def minimax_chat_completion_stream(
 
     Args:
         messages: List of {"role": "...", "content": "..."} dicts.
-        model: MiniMax model ID.
+        model: DeepSeek model ID.
         temperature: Sampling temperature.
         max_tokens: Maximum output tokens.
         extra_body: Optional extra fields to merge into the request body.
@@ -190,7 +189,7 @@ def minimax_chat_completion_stream(
         followed by the full accumulated text.
 
     Raises:
-        ConfigurationError: If MINIMAX_API_KEY is not set.
+        ConfigurationError: If DEEPSEEK_API_KEY is not set.
         APIError: If the API returns an error.
     """
     api_key = _get_api_key()
@@ -202,7 +201,6 @@ def minimax_chat_completion_stream(
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "mask_sensitive_info": True,
         "stream": True,
     }
 
@@ -214,17 +212,17 @@ def minimax_chat_completion_stream(
         "Content-Type": "application/json",
     }
 
-    logger.debug("MiniMax streaming API call: model=%s, msg_count=%d", model, len(messages))
+    logger.debug("DeepSeek streaming API call: model=%s, msg_count=%d", model, len(messages))
 
     try:
         resp = _get_session().post(url, json=body, headers=headers, timeout=API_TIMEOUT_SECONDS, stream=True)
     except requests.Timeout:
-        raise APIError(f"MiniMax streaming API timed out after {API_TIMEOUT_SECONDS}s")
+        raise APIError(f"DeepSeek streaming API timed out after {API_TIMEOUT_SECONDS}s")
     except requests.ConnectionError as exc:
-        raise APIError(f"MiniMax streaming API connection failed: {exc}") from exc
+        raise APIError(f"DeepSeek streaming API connection failed: {exc}") from exc
 
     if resp.status_code != 200:
-        raise APIError(f"MiniMax streaming API returned {resp.status_code}: {_extract_error(resp)}")
+        raise APIError(f"DeepSeek streaming API returned {resp.status_code}: {_extract_error(resp)}")
 
     accumulated: list[str] = []
     for line in resp.iter_lines(decode_unicode=True):
@@ -249,7 +247,7 @@ def minimax_chat_completion_stream(
             yield content
 
     full_text = "".join(accumulated)
-    logger.debug("MiniMax stream complete: %d chars", len(full_text))
+    logger.debug("DeepSeek stream complete: %d chars", len(full_text))
     yield "[STREAM_DONE]"
     yield full_text
 
@@ -259,25 +257,25 @@ def _extract_error(resp: requests.Response) -> str:
     try:
         body = resp.json()
         if "error" in body:
-            return body["error"].get("message", str(body["error"]))
-        if "base_resp" in body:
-            return body["base_resp"].get("status_msg", str(body))
+            err = body["error"]
+            if isinstance(err, dict):
+                return err.get("message", str(err))
+            return str(err)
         return resp.text[:500]
     except (json.JSONDecodeError, KeyError):
         return resp.text[:500]
 
 
 def _parse_response(data: dict[str, Any]) -> dict[str, Any]:
-    """Extract the first choice from a MiniMax chat completion response."""
+    """Extract the first choice from a DeepSeek chat completion response."""
     if "choices" not in data or len(data["choices"]) == 0:
-        raise APIError(f"MiniMax returned no choices: {json.dumps(data, ensure_ascii=False)[:500]}")
+        raise APIError(f"DeepSeek returned no choices: {json.dumps(data, ensure_ascii=False)[:500]}")
 
     choice = data["choices"][0]
     finish_reason = choice.get("finish_reason", "unknown")
     message = choice.get("message", {})
     content = message.get("content", "")
     role = message.get("role", "assistant")
-    reasoning = message.get("reasoning_content", "")
 
     result = {
         "role": role,
@@ -286,10 +284,7 @@ def _parse_response(data: dict[str, Any]) -> dict[str, Any]:
         "usage": data.get("usage", {}),
     }
 
-    if reasoning:
-        logger.debug("MiniMax reasoning: %s", reasoning[:200])
-
-    if finish_reason == "max_output_tokens":
-        logger.warning("MiniMax response truncated (max_tokens reached)")
+    if finish_reason == "length":
+        logger.warning("DeepSeek response truncated (max_tokens reached)")
 
     return result

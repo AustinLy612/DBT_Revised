@@ -10,7 +10,7 @@ Coverage:
 
 Mock strategy:
 - View tests mock teaching.services functions (the API boundary that calls RAG)
-- Service tests mock knowledge_base.rag.chains functions (the MiniMax/Qdrant boundary)
+- Service tests mock knowledge_base.rag.chains functions (the DeepSeek/Qdrant boundary)
 """
 
 from unittest.mock import MagicMock, patch
@@ -134,7 +134,7 @@ class ViewTestMixin:
     """Mixin that patches RAG chain functions and retriever for view tests.
 
     Patches at the knowledge_base.rag level so the REAL teaching.services
-    functions run (and update session fields), but without calling MiniMax
+    functions run (and update session fields), but without calling DeepSeek
     or Qdrant.
 
     The retriever is replaced with a mock so search_with_context returns

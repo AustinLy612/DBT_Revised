@@ -419,46 +419,52 @@ class PromptTemplateTests(TestCase):
 
 class LLMClientErrorTests(TestCase):
     def test_missing_api_key_raises_configuration_error(self):
-        from .rag.llm_client import minimax_chat_completion
-        with patch("django.conf.settings.MINIMAX_API_KEY", ""):
+        from .rag.llm_client import chat_completion
+        with patch("django.conf.settings.DEEPSEEK_API_KEY", ""):
             with self.assertRaises(ConfigurationError):
-                minimax_chat_completion([{"role": "user", "content": "test"}])
+                chat_completion([{"role": "user", "content": "test"}])
 
     def test_api_timeout_raises_api_error(self):
         import requests
-        from .rag.llm_client import APIError, minimax_chat_completion
-        with patch("django.conf.settings.MINIMAX_API_KEY", "test-key"):
-            with patch("django.conf.settings.MINIMAX_BASE_URL", "https://api.minimaxi.com"):
-                with patch("requests.post", side_effect=requests.Timeout):
+        from .rag.llm_client import APIError, chat_completion
+        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
+            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+                mock_session = MagicMock()
+                mock_session.post.side_effect = requests.Timeout
+                with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
                     with self.assertRaises(APIError) as ctx:
-                        minimax_chat_completion([{"role": "user", "content": "test"}])
+                        chat_completion([{"role": "user", "content": "test"}])
                     self.assertIn("timed out", str(ctx.exception))
 
     def test_connection_error_raises_api_error(self):
         import requests
-        from .rag.llm_client import APIError, minimax_chat_completion
-        with patch("django.conf.settings.MINIMAX_API_KEY", "test-key"):
-            with patch("django.conf.settings.MINIMAX_BASE_URL", "https://api.minimaxi.com"):
-                with patch("requests.post", side_effect=requests.ConnectionError("refused")):
+        from .rag.llm_client import APIError, chat_completion
+        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
+            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+                mock_session = MagicMock()
+                mock_session.post.side_effect = requests.ConnectionError("refused")
+                with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
                     with self.assertRaises(APIError) as ctx:
-                        minimax_chat_completion([{"role": "user", "content": "test"}])
+                        chat_completion([{"role": "user", "content": "test"}])
                     self.assertIn("connection failed", str(ctx.exception))
 
     def test_non_200_response_raises_api_error(self):
-        from .rag.llm_client import APIError, minimax_chat_completion
+        from .rag.llm_client import APIError, chat_completion
         mock_resp = MagicMock()
         mock_resp.status_code = 401
         mock_resp.json.return_value = {"error": {"message": "Invalid API key"}}
         mock_resp.text = '{"error": {"message": "Invalid API key"}}'
-        with patch("django.conf.settings.MINIMAX_API_KEY", "test-key"):
-            with patch("django.conf.settings.MINIMAX_BASE_URL", "https://api.minimaxi.com"):
-                with patch("requests.post", return_value=mock_resp):
+        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
+            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+                mock_session = MagicMock()
+                mock_session.post.return_value = mock_resp
+                with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
                     with self.assertRaises(APIError) as ctx:
-                        minimax_chat_completion([{"role": "user", "content": "test"}])
+                        chat_completion([{"role": "user", "content": "test"}])
                     self.assertIn("401", str(ctx.exception))
 
     def test_successful_response_parsing(self):
-        from .rag.llm_client import minimax_chat_completion
+        from .rag.llm_client import chat_completion
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
@@ -470,10 +476,12 @@ class LLMClientErrorTests(TestCase):
             }],
             "usage": {"total_tokens": 50},
         }
-        with patch("django.conf.settings.MINIMAX_API_KEY", "test-key"):
-            with patch("django.conf.settings.MINIMAX_BASE_URL", "https://api.minimaxi.com"):
-                with patch("requests.post", return_value=mock_resp):
-                    result = minimax_chat_completion(
+        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
+            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+                mock_session = MagicMock()
+                mock_session.post.return_value = mock_resp
+                with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
+                    result = chat_completion(
                         [{"role": "user", "content": "你好"}],
                     )
                     self.assertEqual(result["role"], "assistant")
@@ -481,15 +489,17 @@ class LLMClientErrorTests(TestCase):
                     self.assertEqual(result["finish_reason"], "stop")
 
     def test_empty_choices_raises_api_error(self):
-        from .rag.llm_client import APIError, minimax_chat_completion
+        from .rag.llm_client import APIError, chat_completion
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"choices": []}
-        with patch("django.conf.settings.MINIMAX_API_KEY", "test-key"):
-            with patch("django.conf.settings.MINIMAX_BASE_URL", "https://api.minimaxi.com"):
-                with patch("requests.post", return_value=mock_resp):
+        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
+            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+                mock_session = MagicMock()
+                mock_session.post.return_value = mock_resp
+                with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
                     with self.assertRaises(APIError):
-                        minimax_chat_completion([{"role": "user", "content": "test"}])
+                        chat_completion([{"role": "user", "content": "test"}])
 
 
 # ═══════════════════════════════════════════════════════════

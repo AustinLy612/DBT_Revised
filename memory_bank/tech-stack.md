@@ -1,6 +1,6 @@
 # DBT 技能教学平台技术栈最终建议
 
-基于 [DBT_PRD_v0.6.md](./DBT_PRD_v0.6.md) 与截至 `2026-04-26` 核对的官方文档，推荐采用一套**Django 单体应用 + 阿里云自建 MongoDB + MiniMax 为核心 AI 供应商**的技术栈。目标是保持实现简单、后台稳健、研究数据可审计，同时尽量统一外部 AI 依赖，并满足你对自建数据库安全可控的要求。
+基于 [DBT_PRD_v0.6.md](./DBT_PRD_v0.6.md) 与截至 `2026-06-18` 核对的官方文档，推荐采用一套**Django 单体应用 + 阿里云自建 MongoDB + DeepSeek/火山引擎 为核心 AI 供应商**的技术栈。目标是保持实现简单、后台稳健、研究数据可审计，同时尽量统一外部 AI 依赖，并满足你对自建数据库安全可控的要求。
 
 ---
 
@@ -72,10 +72,10 @@
 | 异步任务 | Celery 5.6 |
 | Broker / Cache | Redis 7 |
 | 对象存储 | MinIO |
-| LLM | MiniMax `MiniMax-M2.7` |
+| LLM | DeepSeek `deepseek-v4-flash` |
 | TTS | 火山引擎 `豆包语音合成模型2.0` (Volcengine TTS) |
 | ASR | 火山引擎 (Volcengine ASR) |
-| 图像生成 | MiniMax `image-01`，低延迟可切 `image-01-live` |
+| 图像生成 | 火山引擎 `即梦文生图3.1` (jimeng_t2i_v31) |
 | 部署 | Docker Compose + Nginx(`10443`) + HTTPS |
 | 测试 | pytest + Playwright |
 
@@ -332,7 +332,15 @@ MongoDB Django backend 的一个重要限制是：
 
 ### LLM
 
-- MiniMax `MiniMax-M2.7`
+- DeepSeek `deepseek-v4-flash`
+
+API：
+
+- 端点：`https://api.deepseek.com/v1/chat/completions`
+- 鉴权：`Authorization: Bearer <DEEPSEEK_API_KEY>`
+- JSON Mode：`response_format={"type": "json_object"}`（OpenAI 兼容格式）
+- 流式：SSE 格式，`data: {"choices": [{"delta": {"content": "..."}}]}\n\n`，以 `data: [DONE]` 结束
+- 超时：120s，自动重试（429/502/503/529），2 次重试 × 指数退避
 
 用途：
 
@@ -356,8 +364,10 @@ MongoDB Django backend 的一个重要限制是：
 
 ### 图像生成
 
-- 默认：`image-01`
-- 低延迟可选：`image-01-live`
+- 供应商：火山引擎（Volcengine）即梦文生图3.1
+- 模型：`jimeng_t2i_v31`
+- API：异步提交+轮询模式，`POST https://visual.volcengineapi.com`
+- 鉴权：Volcengine Signature V4 (HMAC-SHA256)，使用 STS 临时凭证
 
 用途：
 
@@ -366,9 +376,10 @@ MongoDB Django backend 的一个重要限制是：
 
 说明：
 
-- MiniMax 官方提供 `POST /v1/image_generation`
+- API 为异步模式：提交任务 → 获得 task_id → 轮询查询结果
 - 返回图片 URL 默认 24 小时有效
-- 这与 PRD 中“不持久化保存生成图片文件”的约束相容
+- 图片格式为 JPEG，支持自定义宽高（1328×1328 至 2048×2048）
+- 这与 PRD 中”不持久化保存生成图片文件”的约束相容
 
 ### ASR
 
@@ -379,11 +390,15 @@ MongoDB Django backend 的一个重要限制是：
 
 原因：
 
-- 最理想的情况是把 LLM、TTS、图片生成、ASR 尽量统一到 MiniMax
-- 但截至当前核对，我没有在公开 API 总览中拿到同样明确的 ASR 接口文档入口
-- 因此工程上应保留 fallback
+- LLM 已迁移至 DeepSeek，TTS/ASR/图片使用火山引擎
+- MiniMax ASR 账号侧尚未完全确认
+- 因此工程上保留 fallback 结构
 
-如果你们账号侧已经确认 MiniMax ASR 可稳定使用，就可以把音频栈完全统一到 MiniMax。
+当前 AI 栈分布：
+- LLM：DeepSeek（deepseek-v4-flash）
+- TTS：火山引擎（豆包语音合成模型2.0）
+- Image：火山引擎（即梦文生图3.1）
+- ASR：火山引擎（优先），MiniMax（备用）
 
 ---
 
@@ -547,9 +562,9 @@ MongoDB Django backend 的一个重要限制是：
 
 ### Phase 6
 
-- MiniMax 图像生成
-- TTS
-- ASR
+- 图像生成（火山引擎 即梦文生图3.1）
+- TTS（火山引擎 豆包语音合成模型2.0）
+- ASR（火山引擎）
 - `10443` HTTPS、DNS-01 证书与设备兼容性回归
 
 ---
@@ -560,7 +575,7 @@ MongoDB Django backend 的一个重要限制是：
 
 1. **数据库优先服从你的熟悉度与自建安全可控要求**，因此选阿里云上的自建 MongoDB。
 2. **应用框架优先服从后台、权限和开发效率**，因此继续选 Django。
-3. **AI 供应商尽量统一**，因此 LLM、TTS、图像生成统一到 MiniMax。
+3. **AI 供应商尽量统一**，LLM 使用 DeepSeek，TTS/ASR/图像生成使用火山引擎。
 4. **ASR 保留最小 fallback**，避免把整套架构押在未完全确认的公开接口上。
 5. **RAG 不做过度工程化**，使用 MongoDB text index + Qdrant 的轻量双检索方案。
 6. **教学与测试子流程使用 LangChain-based RAG + structured output**，但产品主流程仍由应用层控制。
@@ -576,9 +591,9 @@ MongoDB Django backend 的一个重要限制是：
 
 - 你们当前 MiniMax 账号是否已经稳定可用 **ASR API**
 
-如果答案是“能”，那整套 AI 栈可以收敛为：
+如果答案是”能”，那整套 AI 栈可以收敛为：
 
-- LLM：MiniMax
+- LLM：DeepSeek
 - TTS：MiniMax
 - Image：MiniMax
 - ASR：MiniMax
@@ -610,10 +625,10 @@ MongoDB Django backend 的一个重要限制是：
 - Qdrant 文档：https://qdrant.tech/documentation/
 - LangChain Retrieval：https://docs.langchain.com/oss/python/langchain/retrieval
 - LangChain Structured Output：https://docs.langchain.com/oss/python/langchain/structured-output
-- MiniMax API 总览：https://platform.minimaxi.com/docs/api-reference/api-overview
-- MiniMax 文本模型：https://platform.minimaxi.com/docs/api-reference/text-models
-- MiniMax Speech T2A HTTP API：https://platform.minimaxi.com/docs/api-reference/speech-t2a-http
-- MiniMax Image Generation T2I API：https://platform.minimaxi.com/docs/api-reference/image-generation-t2i
+- DeepSeek API 文档：https://api-docs.deepseek.com/zh-cn/
+- MiniMax API 总览：https://platform.minimaxi.com/docs/api-reference/api-overview（已弃用，仅作参考）
+- MiniMax Speech T2A HTTP API：https://platform.minimaxi.com/docs/api-reference/speech-t2a-http（已弃用）
+- MiniMax Image Generation T2I API：https://platform.minimaxi.com/docs/api-reference/image-generation-t2i（已弃用）
 - 火山引擎语音能力文档入口：https://www.volcengine.com/docs/6561
 - HTMX 文档：https://htmx.org/docs/
 - Celery 文档：https://docs.celeryq.dev/en/stable/getting-started/

@@ -3,12 +3,12 @@
 Each function in this module is a self-contained RAG pipeline:
   1. Retrieve relevant chunks from the knowledge base
   2. Format the prompt with student context and retrieved content
-  3. Call the LLM (MiniMax) with the formatted prompt
+  3. Call the LLM (DeepSeek) with the formatted prompt
   4. Parse the JSON response through the Pydantic schema
   5. Return the validated structured output
 
 All functions accept either:
-- A real MiniMax API call (when MINIMAX_API_KEY is set), or
+- A real DeepSeek API call (when DEEPSEEK_API_KEY is set), or
 - A mock_llm_response parameter for testing without API access
 
 Error handling:
@@ -26,7 +26,7 @@ from typing import Any
 from .llm_client import (
     APIError,
     ConfigurationError,
-    minimax_chat_completion,
+    chat_completion,
 )
 from .prompts import (
     build_personal_inquiry_messages,
@@ -75,10 +75,10 @@ def _call_llm_or_mock(
                 f"Mock validation failed for {schema_model.__name__}: {exc}"
             ) from exc
 
-    raw_result = minimax_chat_completion(
+    raw_result = chat_completion(
         messages,
         temperature=0.3,
-        reply_format="json",
+        response_format={"type": "json_object"},
     )
 
     content = raw_result["content"]
@@ -335,7 +335,7 @@ def stream_teaching_content(
     (<!--META:{...}-->) at the end.  The comment is filtered from the
     stream so the user only sees the teaching content.
     """
-    from .llm_client import APIError, ConfigurationError, minimax_chat_completion_stream
+    from .llm_client import APIError, ConfigurationError, chat_completion_stream
     from .prompts import build_streaming_teaching_messages
     from .retriever import get_retriever
 
@@ -365,7 +365,7 @@ def stream_teaching_content(
     )
 
     try:
-        stream = minimax_chat_completion_stream(messages)
+        stream = chat_completion_stream(messages)
     except (ConfigurationError, APIError) as exc:
         yield {"type": "error", "message": str(exc)}
         return

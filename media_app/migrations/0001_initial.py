@@ -59,7 +59,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('image_id', models.CharField(default=dbt_platform.utils.gen_uuid, editable=False, max_length=36, primary_key=True, serialize=False)),
                 ('prompt', models.TextField()),
-                ('model', models.CharField(default='image-01', max_length=64)),
+                ('model', models.CharField(default='jimeng_t2i_v31', max_length=64)),
                 ('temporary_image_url', models.TextField(blank=True, default='')),
                 ('status', models.CharField(choices=[('success', '成功'), ('failed', '失败')], default='success', max_length=10)),
                 ('error_message', models.TextField(blank=True, default='')),

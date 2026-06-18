@@ -1,4 +1,4 @@
-"""Celery tasks for media_app — async image generation."""
+"""Celery tasks for media_app — async image generation via Volcengine Jimeng."""
 
 import logging
 
@@ -9,7 +9,7 @@ logger = logging.getLogger("dbt_platform.media_app")
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10)
 def generate_image_async(self, session_id: str, image_prompt: str):
-    """Generate an image via MiniMax and attach it to the latest assistant message.
+    """Generate an image via Jimeng and attach it to the latest assistant message.
 
     Runs as a Celery task so gunicorn workers are never blocked by the
     image API call. On success the image_url is written to the most recent

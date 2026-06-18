@@ -51,7 +51,7 @@ DBT/
 ├── logs/                  # Application log files
 │
 ├── docker/                # Deployment configs
-│   ├── nginx.conf         # Reverse proxy, :443 HTTP/2 (maps to host :10443)
+│   ├── nginx.conf         # Reverse proxy, HTTPS :443, HTTP→HTTPS redirect :80
 │   ├── mongo-init.js      # Creates dbt_app user on first MongoDB start
 │   └── certs/             # SSL certificates (mounted into Nginx)
 │
@@ -89,15 +89,15 @@ Django's `auth`, `contenttypes`, `admin`, `sessions`, `messages` apps use `AutoF
 **Internal services** (MongoDB, Redis, MinIO, Qdrant, Celery, Django itself) communicate over `localhost` or Docker network hostnames. These addresses never appear in browser-side code.
 
 **External access** (browsers on other devices) goes through:
-1. Nginx on `:10443` (the only port exposed to the network)
-2. Nginx proxies to Django on the internal network
+1. Nginx on `:443` (HTTPS) and `:80` (HTTP→HTTPS redirect) — standard ports exposed to the network
+2. Nginx proxies to Django on the internal Docker network
 3. All browser requests use relative paths (`/health/`, `/accounts/login/`)
 4. Absolute URLs (exports, reports) use `EXTERNAL_BASE_URL`
 
-Configuration variables that MUST change for production:
-- `DJANGO_ALLOWED_HOSTS` → add domain
-- `EXTERNAL_BASE_URL` → `https://<domain>:10443`
-- `CSRF_TRUSTED_ORIGINS` → `https://<domain>:10443`
+**Production domain**: `https://genaidbt.top` (ICP备案: 豫ICP备2026025419号)
+- `DJANGO_ALLOWED_HOSTS` = `genaidbt.top,www.genaidbt.top`
+- `EXTERNAL_BASE_URL` = `https://genaidbt.top`
+- `CSRF_TRUSTED_ORIGINS` = `https://genaidbt.top,https://www.genaidbt.top`
 - `SESSION_COOKIE_SECURE` / `CSRF_COOKIE_SECURE` → auto-enabled when `DEBUG=False`
 
 ### 5. MongoDB Security Model
@@ -632,7 +632,7 @@ full_text → extract_sections() → [{title, content}, ...]
 knowledge_base/rag/
 ├── __init__.py          # Package exports (6 schemas, retriever, 6 chains, validator)
 ├── schemas.py           # 6 Pydantic v2 models — the contract between LLM output and downstream code
-├── llm_client.py        # MiniMax API wrapper — endpoint, auth, error handling, reasoning support
+├── llm_client.py        # DeepSeek API wrapper — endpoint, auth, error handling
 ├── prompts.py           # 6 prompt builders — construct system+user messages from context + schemas
 ├── retriever.py         # LangChain BaseRetriever wrapping hybrid_search() + RetrievalLog auto-write
 ├── chains.py            # 6 chain functions — retrieve → prompt → LLM → validate → return Pydantic
@@ -659,14 +659,12 @@ RiskAssessment        → "评估用户消息是否存在风险"
 - This enforces specific skill recommendation rather than broad module-level selection.
 - The prompt includes a module→skills mapping so the LLM understands the hierarchy.
 
-**`llm_client.py`** — Thin wrapper around MiniMax ChatCompletion API:
-- Endpoint: `https://api.minimaxi.com/v1/text/chatcompletion_v2`
-- Auth: `Bearer <MINIMAX_API_KEY>` header
-- Defaults: model=`MiniMax-M2.7`, temperature=0.3, max_tokens=4096, timeout=60s
-- JSON mode: `reply_format="json"` (MiniMax-native parameter)
-- Reasoning model handling: M2.7 outputs `reasoning_content` (thinking trace) separately from `content` (actual response). The client separates them — `reasoning_content` is logged for debugging, `content` is returned for parsing.
+**`llm_client.py`** — Thin wrapper around DeepSeek ChatCompletion API:
+- Endpoint: `https://api.deepseek.com/v1/chat/completions`
+- Auth: `Bearer <DEEPSEEK_API_KEY>` header
+- Defaults: model=`deepseek-v4-flash`, temperature=0.3, max_tokens=4096, timeout=120s
+- JSON mode: `response_format={"type": "json_object"}` (OpenAI-compatible parameter)
 - Error hierarchy: `ConfigurationError` (missing API key) vs `APIError` (runtime failures: timeout, connection error, non-200, empty choices)
-- Best-effort error extraction from multiple MiniMax response formats (`base_resp.status_msg`, `error.message`, raw text)
 
 **`prompts.py`** — 6 `build_*_messages()` functions, each returning `[{"role": "system", "content": ...}, {"role": "user", "content": ...}]`. Shared helpers:
 - `_format_profile(profile)`: renders UserProfile (Pydantic or dict) to Chinese text. Already handles both types via `isinstance(profile, dict)` check.
@@ -715,7 +713,7 @@ query → retriever.search_with_context(query)
       → messages (list[{role, content}])
       → _call_llm_or_mock(messages, SchemaClass, mock_llm_response)
           ├─ mock path: OutputValidator.validate_and_repair(mock_llm_response, SchemaClass)
-          └─ real path: minimax_chat_completion(messages, reply_format="json")
+          └─ real path: chat_completion(messages, response_format={"type": "json_object"})
                          → json.loads(content)
                          → OutputValidator.validate_and_repair(parsed, SchemaClass)
       → SchemaClass(**result)  # validated Pydantic instance
@@ -774,15 +772,15 @@ During teaching (`generate_teaching_response()`), the current step's pre-fetched
 
 **Interaction with Redis cache (Opt 7)**: Pre-fetch calls `hybrid_search()` which is Redis-cached. Subsequent messages in the same step benefit from both the warm cache and the pre-fetched context, minimizing backend queries.
 
-### 37. LLM Client: MiniMax-Specific Design Decisions
+### 37. LLM Client: DeepSeek-Specific Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| Native endpoint (`/v1/text/chatcompletion_v2`) over OpenAI-compatible (`/v1/chat/completions`) | OpenAI endpoint wraps reasoning in `<think>` XML tags inside `content`. Native endpoint separates `reasoning_content` from `content` — clean JSON in `content`. |
-| `reply_format="json"` over `response_format={"type": "json_object"}` | `reply_format` is the MiniMax-native parameter. The OpenAI-style `response_format` dict is not recognized by the v2 endpoint. |
-| `mask_sensitive_info=True` in request body | MiniMax privacy feature — masks PII in logs. Enabled by default. |
-| Model lock to `MiniMax-M2.7` | Consistent behavior across all sub-flows. No per-call model switching needed. |
+| OpenAI-compatible endpoint (`/v1/chat/completions`) | DeepSeek uses OpenAI-compatible API format. Standard SSE streaming with `data: {"choices": [{"delta": {"content": "..."}}]}\n\n` and `data: [DONE]` termination. |
+| `response_format={"type": "json_object"}` | OpenAI-standard JSON mode. Ensures structured output for parsing by Pydantic schemas. |
+| Model lock to `deepseek-v4-flash` | Consistent behavior across all sub-flows. No per-call model switching needed. |
 | Temperature 0.3 | Low enough for deterministic structured output, high enough for natural Chinese teaching dialogue. |
+| Timeout 120s + exponential backoff retry | DeepSeek V4 Flash responses may take longer for complex RAG tasks. Retry on 429/502/503/529 with 1.5s/3.0s backoff. |
 
 ### 38. Graceful Degradation: Embedding Model Unavailability
 
@@ -1407,7 +1405,7 @@ risk_context = _get_answer_context(test)      # last 3 answered questions
 services.process_test_risk(test, user, selected_text, risk_context)
 ```
 
-`_get_answer_context()` collects the 3 most recently answered question texts for AI context. `process_test_risk()` runs keyword check first. **As of Step 14**, a `should_assess_risk()` gate skips the MiniMax LLM call when the text contains no risk keywords or moderate concern indicators — the vast majority of benign test answers return in milliseconds. Only text matching keyword lists or concern indicators triggers the full AI semantic assessment.
+`_get_answer_context()` collects the 3 most recently answered question texts for AI context. `process_test_risk()` runs keyword check first. **As of Step 14**, a `should_assess_risk()` gate skips the DeepSeek LLM call when the text contains no risk keywords or moderate concern indicators — the vast majority of benign test answers return in milliseconds. Only text matching keyword lists or concern indicators triggers the full AI semantic assessment.
 
 On high risk, the test is terminated (status → USER_TERMINATED) and a RiskEvent is created with `detection_source="both"` or `"keyword"`.
 
@@ -2339,7 +2337,7 @@ The readiness check (`/health/ready/`) probes MongoDB, Redis, Qdrant, and MinIO.
 
 ### §92 `risk/services.py` — AI Failure Fallback (Step 13 fix)
 
-The dual-channel risk system (keyword + AI semantic) previously called `run_risk_assessment()` without error handling. If the MiniMax LLM was unavailable, `APIError` propagated to the caller — the teaching view would crash or terminate the session unexpectedly. Step 13 added try/except blocks in both `process_risk_check()` and `process_test_risk_check()`, with fallback behavior:
+The dual-channel risk system (keyword + AI semantic) previously called `run_risk_assessment()` without error handling. If the DeepSeek LLM was unavailable, `APIError` propagated to the caller — the teaching view would crash or terminate the session unexpectedly. Step 13 added try/except blocks in both `process_risk_check()` and `process_test_risk_check()`, with fallback behavior:
 
 - **AI raises `APIError`**: Logged at ERROR level, falls back to keyword-only assessment.
 - **AI raises unexpected `Exception`**: Logged at ERROR with traceback, same fallback.
@@ -2404,14 +2402,14 @@ Browser (Fetch + ReadableStream)
   → Nginx (proxy_buffering off, proxy_read_timeout 120s)
     → Gunicorn/Django (StreamingHttpResponse, text/event-stream)
       → chains.stream_teaching_content() (generator)
-        → minimax_chat_completion_stream() (requests.iter_lines, stream=True)
-          → MiniMax API (/v1/text/chatcompletion_v2, stream=True)
+        → chat_completion_stream() (requests.iter_lines, stream=True)
+          → DeepSeek API (/v1/chat/completions, stream=True)
 ```
 
 **Key files:**
 | Layer | File | Change |
 |-------|------|--------|
-| LLM Client | `knowledge_base/rag/llm_client.py` | `minimax_chat_completion_stream()` — `stream=True`, iterates `resp.iter_lines()`, yields content deltas, then `[STREAM_DONE]` sentinel, then full accumulated text |
+| LLM Client | `knowledge_base/rag/llm_client.py` | `chat_completion_stream()` — `stream=True`, iterates `resp.iter_lines()`, yields content deltas, then `[STREAM_DONE]` sentinel, then full accumulated text |
 | Prompt | `knowledge_base/rag/prompts.py` | `_STREAMING_TEACHING_SYSTEM` — instructs LLM to output natural Chinese with `<!--META:{json}-->` HTML comment at end instead of pure JSON. `build_streaming_teaching_messages()` builds message list |
 | Chain | `knowledge_base/rag/chains.py` | `stream_teaching_content()` — generator: RAG retrieval → build messages → call streaming API → yield `{"type":"content","text":"..."}` SSE events → parse META from full text → yield `{"type":"done","teaching_content":{...}}`. `_parse_streaming_content()` — regex extracts `<!--META:...-->`, returns clean TeachingContent dict |
 | View | `teaching/views.py` | `stream_message_view()` — returns `StreamingHttpResponse(text/event-stream)`, creates user ChatMessage, runs streaming chain generator, creates assistant ChatMessage on "done" event, injects `message_id` into response for TTS button |
@@ -2715,3 +2713,53 @@ _playAudioBlob (已缓存的 blob — 即时播放)
 | API 调用完成 | 等待中 | 浏览器已在播放 |
 | 完整音频传输到浏览器 | 现在才开始下载 | 已在播放中 |
 | 浏览器开始播放 | API时间 + 传输时间 | ~首 chunk 延迟 (0.5-1s) |
+
+---
+
+### §103 Domain & SSL Configuration (2026-06-18)
+
+**Domain info**:
+- Domain: `genaidbt.top`
+- ICP备案: 豫ICP备2026025419号 (displayed in `templates/base.html` footer)
+- Server IP: `118.178.170.46`
+- DNS provider: Alibaba Cloud DNS (HiChina — dns9.hichina.com / dns10.hichina.com)
+
+**DNS records** (managed via Alibaba Cloud DNS API, `certbot-dns-aliyun`):
+| Type | Host | Value |
+|------|------|-------|
+| A | `@` | `118.178.170.46` |
+| A | `www` | `118.178.170.46` |
+
+**SSL certificates**:
+- Provider: Let's Encrypt (ACME v2, DNS-01 challenge via Alibaba Cloud DNS API)
+- Certificate: `/etc/letsencrypt/live/genaidbt.top/fullchain.pem`
+- Private key: `/etc/letsencrypt/live/genaidbt.top/privkey.pem`
+- Covers: `genaidbt.top` + `www.genaidbt.top`
+- Auto-renewal: Daily cron at 3:27 AM (`certbot renew --quiet`), post-hook copies certs to `docker/certs/` and restarts nginx
+- Credentials: `docker/aliyun-credentials.ini` (chmod 600, mounted `dns_aliyun_access_key` / `dns_aliyun_access_key_secret`)
+
+**Nginx port mapping** (`docker-compose.yml`):
+| Host | Container | Purpose |
+|------|-----------|---------|
+| `80` | `80` | HTTP → HTTPS redirect |
+| `443` | `443` | HTTPS (HTTP/2) |
+
+**Nginx redirect behavior** (`docker/nginx.conf`):
+- `http://genaidbt.top` → 301 → `https://genaidbt.top`
+- `http://www.genaidbt.top` → 301 → `https://genaidbt.top`
+- `https://www.genaidbt.top` → 301 → `https://genaidbt.top`
+
+**Django production settings** (`.env`):
+- `DJANGO_ALLOWED_HOSTS=genaidbt.top,www.genaidbt.top,localhost,127.0.0.1`
+- `EXTERNAL_BASE_URL=https://genaidbt.top`
+- `CSRF_TRUSTED_ORIGINS=https://genaidbt.top,https://www.genaidbt.top`
+
+**Key files**:
+| File | Role |
+|------|------|
+| `docker/nginx.conf` | Server blocks: HTTP redirect, www→root redirect, main HTTPS server |
+| `docker/aliyun-credentials.ini` | Alibaba Cloud DNS API credentials for certbot |
+| `scripts/cert-renewal-hook.sh` | Post-renewal: copies certs → `docker/certs/`, restarts nginx |
+| `templates/base.html` | Footer displays ICP备案号 豫ICP备2026025419号 |
+| `.env` | Production domain config (DJANGO_ALLOWED_HOSTS, EXTERNAL_BASE_URL, CSRF_TRUSTED_ORIGINS) |
+| `.env.example` | Updated production examples with domain-specific values |

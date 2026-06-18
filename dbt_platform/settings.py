@@ -169,7 +169,11 @@ QDRANT_HOST = env("QDRANT_HOST", default="localhost")
 QDRANT_PORT = env.int("QDRANT_PORT", default=6333)
 QDRANT_COLLECTION = env("QDRANT_COLLECTION", default="dbt_knowledge")
 
-# ── MiniMax API ──
+# ── DeepSeek API (LLM) ──
+DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY", default="")
+DEEPSEEK_BASE_URL = env("DEEPSEEK_BASE_URL", default="https://api.deepseek.com")
+
+# ── MiniMax (deprecated — kept for backward compatibility) ──
 MINIMAX_API_KEY = env("MINIMAX_API_KEY", default="")
 MINIMAX_BASE_URL = env("MINIMAX_BASE_URL", default="https://api.minimaxi.com")
 
@@ -224,12 +228,6 @@ LOGGING = {
         "pymongo": {"handlers": ["console"], "level": "WARNING", "propagate": False},
         "httpcore": {"handlers": ["console"], "level": "WARNING", "propagate": False},
         "sentence_transformers": {"handlers": ["console"], "level": "INFO", "propagate": False},
-    },
-    "root": {
-        "handlers": ["console", "file"],
-        "level": "INFO" if not DEBUG else "DEBUG",
-    },
-    "loggers": {
         "django": {
             "handlers": ["console", "file"],
             "level": "INFO",
@@ -240,6 +238,10 @@ LOGGING = {
             "level": "DEBUG" if DEBUG else "INFO",
             "propagate": False,
         },
+    },
+    "root": {
+        "handlers": ["console", "file"],
+        "level": "INFO" if not DEBUG else "DEBUG",
     },
 }
 

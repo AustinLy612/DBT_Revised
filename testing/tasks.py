@@ -28,7 +28,7 @@ def generate_test_questions_async(self, test_id: str):
         logger.info("Async question generation complete for test %s", test_id)
 
         # Auto-dispatch image generation with staggered countdown to avoid
-        # MiniMax API rate-limiting (5 simultaneous requests → HTTP 429).
+        # API rate-limiting.
         for i, q in enumerate(saved_questions):
             if q.image_prompt:
                 generate_test_question_image_async.apply_async(
@@ -47,7 +47,7 @@ def generate_test_questions_async(self, test_id: str):
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
 def generate_test_question_image_async(self, question_id: str):
-    """Generate an illustration image for a test question via MiniMax API.
+    """Generate an illustration image for a test question via Jimeng API.
 
     Updates the TestQuestion with the image URL on success.
     """
@@ -69,7 +69,7 @@ def generate_test_question_image_async(self, question_id: str):
 
         if image_url:
             question.temporary_image_url = image_url
-            question.image_model = result.get("model", "image-01-live")
+            question.image_model = result.get("model", "jimeng_t2i_v31")
             from django.utils import timezone
             question.image_generated_at = timezone.now()
             question.save(update_fields=[

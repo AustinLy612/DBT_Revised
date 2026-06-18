@@ -1,7 +1,7 @@
 """Prompt templates for DBT RAG sub-flows.
 
 Every prompt is a function that accepts typed inputs and returns a
-(messages list) suitable for the MiniMax chat completions API.  This
+(messages list) suitable for the DeepSeek chat completions API.  This
 design keeps prompts testable: given known inputs, tests can assert
 specific substrings appear in the rendered text.
 

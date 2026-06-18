@@ -59,13 +59,13 @@ class ImageGenerationLogModelTests(TestCase):
         log = ImageGenerationLog.objects.create(
             user=user,
             prompt="一只可爱的猫",
-            model="image-01",
+            model="jimeng_t2i_v31",
             temporary_image_url="https://example.com/img.png",
             status=ImageGenerationLog.Status.SUCCESS,
             source="manual",
         )
         self.assertEqual(log.status, "success")
-        self.assertEqual(log.model, "image-01")
+        self.assertEqual(log.model, "jimeng_t2i_v31")
         self.assertIn("猫", log.prompt)
         self.assertIsNotNone(log.created_at)
 
@@ -172,36 +172,106 @@ class ImageGenerationServiceTests(TestCase):
     def setUp(self):
         self.user = create_student()
 
-    @patch("media_app.services.requests.post")
-    def test_generate_image_success(self, mock_post):
-        mock_post.return_value.status_code = 200
-        mock_post.return_value.json.return_value = {
-            "data": [{"url": "https://cdn.example.com/generated.png"}],
-            "usage": {"total_tokens": 50},
+    @staticmethod
+    def _apply_auth_patches():
+        """Start auth/sleep patches. Returns list of patches to stop."""
+        p1 = patch.object(services, "_parse_image_api_key", return_value=("ak", "sk", "token"))
+        p2 = patch.object(services, "_volcengine_sign_headers", return_value={"Authorization": "HMAC-SHA256 ...", "Content-Type": "application/json"})
+        p3 = patch("media_app.services.time.sleep", return_value=None)
+        p1.start()
+        p2.start()
+        p3.start()
+        return [p1, p2, p3]
+
+    @patch("media_app.services._get_session")
+    def test_generate_image_success(self, mock_session):
+        mock_sess = Mock()
+        # Submit response
+        submit_resp = Mock()
+        submit_resp.status_code = 200
+        submit_resp.json.return_value = {
+            "code": 10000,
+            "data": {"task_id": "task-abc-123"},
+            "message": "Success",
         }
-        result = services.generate_image("夕阳下的海滩")
+        # Poll response
+        poll_resp = Mock()
+        poll_resp.status_code = 200
+        poll_resp.json.return_value = {
+            "code": 10000,
+            "data": {
+                "image_urls": ["https://cdn.example.com/generated.png"],
+                "status": "done",
+            },
+            "message": "Success",
+        }
+        mock_sess.post.side_effect = [submit_resp, poll_resp]
+        mock_session.return_value = mock_sess
+
+        patches = self._apply_auth_patches()
+        try:
+            result = services.generate_image("夕阳下的海滩")
+        finally:
+            for p in patches:
+                p.stop()
+
         self.assertEqual(len(result["urls"]), 1)
         self.assertIn("cdn.example.com", result["urls"][0])
-        self.assertEqual(result["model"], "image-01")
+        self.assertEqual(result["model"], "jimeng_t2i_v31")
 
-    @patch("media_app.services.requests.post")
-    def test_generate_image_api_error(self, mock_post):
-        mock_post.return_value.status_code = 400
-        mock_post.return_value.json.return_value = {
-            "error": {"message": "Invalid prompt"}
+    @patch("media_app.services._get_session")
+    def test_generate_image_submit_error(self, mock_session):
+        mock_sess = Mock()
+        submit_resp = Mock()
+        submit_resp.status_code = 400
+        submit_resp.json.return_value = {
+            "code": 50412,
+            "message": "Text Risk Not Pass",
         }
-        with self.assertRaises(services.APIError):
-            services.generate_image("")
+        mock_sess.post.return_value = submit_resp
+        mock_session.return_value = mock_sess
 
-    @patch("media_app.services.requests.post")
-    def test_generate_image_timeout(self, mock_post):
+        patches = self._apply_auth_patches()
+        try:
+            with self.assertRaises(services.APIError):
+                services.generate_image("")
+        finally:
+            for p in patches:
+                p.stop()
+
+    @patch("media_app.services._get_session")
+    def test_generate_image_poll_timeout(self, mock_session):
         import requests as req
-        mock_post.side_effect = req.Timeout()
-        with self.assertRaises(services.APIError):
-            services.generate_image("test prompt")
+        mock_sess = Mock()
+        submit_resp = Mock()
+        submit_resp.status_code = 200
+        submit_resp.json.return_value = {
+            "code": 10000,
+            "data": {"task_id": "task-xyz"},
+            "message": "Success",
+        }
+
+        call_count = [0]
+
+        def _side_effect(*args, **kwargs):
+            if call_count[0] == 0:
+                call_count[0] += 1
+                return submit_resp
+            raise req.Timeout()
+
+        mock_sess.post.side_effect = _side_effect
+        mock_session.return_value = mock_sess
+
+        patches = self._apply_auth_patches()
+        try:
+            with self.assertRaises(services.APIError):
+                services.generate_image("test prompt", max_retries=0, retry_base_delay=0.01)
+        finally:
+            for p in patches:
+                p.stop()
 
     def test_generate_image_missing_key(self):
-        with patch.object(services, "_get_api_key", side_effect=services.ConfigurationError("no key")):
+        with patch.object(services, "_parse_image_api_key", side_effect=services.ConfigurationError("no key")):
             with self.assertRaises(services.ConfigurationError):
                 services.generate_image("test")
 
@@ -331,7 +401,7 @@ class ASRServiceTests(TestCase):
         self.assertIn("volcengine", str(ctx.exception))
 
     def test_transcribe_audio_missing_key(self):
-        with patch.object(services, "_get_api_key", side_effect=services.ConfigurationError("no key")):
+        with patch.object(services, "_get_volcengine_api_key", side_effect=services.ConfigurationError("no key")):
             with self.assertRaises(services.ConfigurationError):
                 services.transcribe_audio(b"data")
 
@@ -365,18 +435,18 @@ class ImageGenerationViewTests(TestCase):
     def test_success_returns_image_html(self, mock_gen):
         mock_gen.return_value = {
             "urls": ["https://cdn.example.com/img.png"],
-            "model": "image-01",
+            "model": "jimeng_t2i_v31",
             "usage": {},
         }
         resp = self.client.post(self.url, {
             "prompt": "美丽的风景画",
-            "model": "image-01",
+            "model": "jimeng_t2i_v31",
             "source": "teaching_scene",
         })
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
         self.assertIn("cdn.example.com", content)
-        self.assertIn("image-01", content)
+        self.assertIn("jimeng_t2i_v31", content)
         # Verify ImageGenerationLog created
         self.assertEqual(ImageGenerationLog.objects.count(), 1)
         log = ImageGenerationLog.objects.first()
@@ -396,7 +466,7 @@ class ImageGenerationViewTests(TestCase):
 
     @patch("media_app.views.services.generate_image")
     def test_no_url_returns_error(self, mock_gen):
-        mock_gen.return_value = {"urls": [], "model": "image-01", "usage": {}}
+        mock_gen.return_value = {"urls": [], "model": "jimeng_t2i_v31", "usage": {}}
         resp = self.client.post(self.url, {"prompt": "test"})
         self.assertIn("未返回图片", resp.content.decode())
 
@@ -801,48 +871,145 @@ class TestDatabaseIsolationTests(TestCase):
 
 
 class ImageGenerationRetryTests(TestCase):
-    """Tests for generate_image retry logic on transient HTTP errors."""
+    """Tests for generate_image submit-phase retry logic on transient errors."""
 
     def setUp(self):
         self.user = create_student()
+        self._auth_patches = [
+            patch.object(services, "_parse_image_api_key", return_value=("ak", "sk", "token")),
+            patch.object(services, "_volcengine_sign_headers", return_value={"Authorization": "HMAC-SHA256 ...", "Content-Type": "application/json"}),
+            patch("media_app.services.time.sleep", return_value=None),
+        ]
 
-    @patch("media_app.services.requests.post")
-    def test_retries_on_429_then_succeeds(self, mock_post):
+    @patch("media_app.services._get_session")
+    def test_retries_on_429_then_succeeds(self, mock_session):
         """429 rate-limit responses trigger retry with backoff, then succeed."""
         rate_limited = Mock()
         rate_limited.status_code = 429
         rate_limited.json.return_value = {"error": {"message": "rate limited"}}
 
-        success = Mock()
-        success.status_code = 200
-        success.json.return_value = {
-            "data": {"image_urls": ["https://cdn.example.com/img.png"]},
-            "usage": {},
+        # Successful submit
+        submit_ok = Mock()
+        submit_ok.status_code = 200
+        submit_ok.json.return_value = {
+            "code": 10000,
+            "data": {"task_id": "task-123"},
+            "message": "Success",
         }
 
-        mock_post.side_effect = [rate_limited, rate_limited, success]
+        # Successful poll
+        poll_ok = Mock()
+        poll_ok.status_code = 200
+        poll_ok.json.return_value = {
+            "code": 10000,
+            "data": {
+                "image_urls": ["https://cdn.example.com/img.png"],
+                "status": "done",
+            },
+            "message": "Success",
+        }
 
-        result = services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+        mock_sess = Mock()
+        mock_sess.post.side_effect = [rate_limited, rate_limited, submit_ok, poll_ok]
+        mock_session.return_value = mock_sess
+
+        for p in self._auth_patches:
+            p.start()
+        try:
+            result = services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+        finally:
+            for p in self._auth_patches:
+                p.stop()
+
         self.assertEqual(len(result["urls"]), 1)
-        self.assertEqual(mock_post.call_count, 3)
+        # 1st & 2nd calls: retry (429), 3rd: submit (200), 4th: poll
+        self.assertEqual(mock_sess.post.call_count, 4)
 
-    @patch("media_app.services.requests.post")
-    def test_no_retry_on_400(self, mock_post):
+    @patch("media_app.services._get_session")
+    def test_no_retry_on_400(self, mock_session):
         """400 (client error) should NOT retry — it's a permanent error."""
-        mock_post.return_value.status_code = 400
-        mock_post.return_value.json.return_value = {"error": {"message": "bad request"}}
+        mock_sess = Mock()
+        submit_bad = Mock()
+        submit_bad.status_code = 400
+        submit_bad.json.return_value = {
+            "code": 50412,
+            "message": "Text Risk Not Pass",
+        }
+        mock_sess.post.return_value = submit_bad
+        mock_session.return_value = mock_sess
 
-        with self.assertRaises(services.APIError):
-            services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
-        self.assertEqual(mock_post.call_count, 1)
+        for p in self._auth_patches:
+            p.start()
+        try:
+            with self.assertRaises(services.APIError):
+                services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+        finally:
+            for p in self._auth_patches:
+                p.stop()
+        self.assertEqual(mock_sess.post.call_count, 1)
 
-    @patch("media_app.services.requests.post")
-    def test_exhausts_retries_then_raises(self, mock_post):
-        """When all retries return transient errors, eventually raise APIError."""
-        mock_post.return_value.status_code = 503
-        mock_post.return_value.json.return_value = {"error": {"message": "service unavailable"}}
+    @patch("media_app.services._get_session")
+    def test_exhausts_retries_then_raises(self, mock_session):
+        """When all submit retries return transient errors, eventually raise APIError."""
+        mock_sess = Mock()
+        server_err = Mock()
+        server_err.status_code = 503
+        server_err.json.return_value = {"message": "service unavailable"}
+        mock_sess.post.return_value = server_err
+        mock_session.return_value = mock_sess
 
-        with self.assertRaises(services.APIError) as ctx:
-            services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
-        self.assertIn("503", str(ctx.exception))
-        self.assertEqual(mock_post.call_count, 3)  # 1 initial + 2 retries
+        for p in self._auth_patches:
+            p.start()
+        try:
+            with self.assertRaises(services.APIError) as ctx:
+                services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
+            self.assertIn("503", str(ctx.exception))
+        finally:
+            for p in self._auth_patches:
+                p.stop()
+        self.assertEqual(mock_sess.post.call_count, 3)  # 1 initial + 2 retries
+
+    @patch("media_app.services._get_session")
+    def test_retries_on_business_error_code(self, mock_session):
+        """Business error codes 50429/50430 trigger retry on submit."""
+        rate_limited_resp = Mock()
+        rate_limited_resp.status_code = 200
+        rate_limited_resp.json.return_value = {
+            "code": 50429,
+            "message": "QPS超限",
+        }
+
+        # Successful submit on retry
+        submit_ok = Mock()
+        submit_ok.status_code = 200
+        submit_ok.json.return_value = {
+            "code": 10000,
+            "data": {"task_id": "task-456"},
+            "message": "Success",
+        }
+
+        poll_ok = Mock()
+        poll_ok.status_code = 200
+        poll_ok.json.return_value = {
+            "code": 10000,
+            "data": {
+                "image_urls": ["https://cdn.example.com/img2.png"],
+                "status": "done",
+            },
+            "message": "Success",
+        }
+
+        mock_sess = Mock()
+        mock_sess.post.side_effect = [rate_limited_resp, submit_ok, poll_ok]
+        mock_session.return_value = mock_sess
+
+        for p in self._auth_patches:
+            p.start()
+        try:
+            result = services.generate_image("test", max_retries=2, retry_base_delay=0.01)
+        finally:
+            for p in self._auth_patches:
+                p.stop()
+
+        self.assertEqual(len(result["urls"]), 1)
+        self.assertIn("cdn.example.com", result["urls"][0])

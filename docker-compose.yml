@@ -71,6 +71,8 @@ services:
   # ── MongoDB ──
   mongodb:
     image: mongo:7
+    ports:
+      - "127.0.0.1:27018:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGODB_ROOT_USER:-root}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_ROOT_PASSWORD:-rootpassword}
@@ -105,11 +107,12 @@ services:
     networks:
       - dbt_net
 
-  # ── Nginx (reverse proxy, :10443) ──
+  # ── Nginx (reverse proxy) ──
   nginx:
     image: nginx:1.27-alpine
     ports:
-      - "10443:443"
+      - "80:80"
+      - "443:443"
     volumes:
       - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./docker/certs:/etc/nginx/certs:ro
