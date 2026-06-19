@@ -134,7 +134,9 @@ class APIError(RuntimeError):
 def _parse_image_api_key() -> tuple[str, str, str]:
 	"""Parse VOLCENGINE_IMAGE_API_KEY into (access_key, secret_key, session_token).
 
-	The key uses STS format: AccessKeyId.SecretAccessKey.SessionToken
+	Supports two formats:
+	  - Long-term key: AccessKeyId.SecretAccessKey  (2 parts, no session token)
+	  - STS key:        AccessKeyId.SecretAccessKey.SessionToken  (3 parts)
 	"""
 	key = getattr(settings, "VOLCENGINE_IMAGE_API_KEY", "")
 	if not key:
@@ -142,11 +144,14 @@ def _parse_image_api_key() -> tuple[str, str, str]:
 			"VOLCENGINE_IMAGE_API_KEY is not set. Set it in .env to use image generation."
 		)
 	parts = key.split(".")
-	if len(parts) != 3:
-		raise ConfigurationError(
-			"VOLCENGINE_IMAGE_API_KEY format is invalid. Expected AK.SK.Token (STS format)."
-		)
-	return parts[0], parts[1], parts[2]
+	if len(parts) == 3:
+		return parts[0], parts[1], parts[2]
+	if len(parts) == 2:
+		return parts[0], parts[1], ""
+	raise ConfigurationError(
+		"VOLCENGINE_IMAGE_API_KEY format is invalid. "
+		"Expected AK.SK or AK.SK.Token (STS format)."
+	)
 
 
 def _extract_error(resp: requests.Response) -> str:
@@ -236,8 +241,10 @@ def _volcengine_sign_headers(
 		f"{_sha256_hex(canonical_request)}"
 	)
 
-	# Signing key
-	k_date = _sign(("VOLC" + secret_key).encode("utf-8"), datestamp)
+	# Signing key — Volcengine uses the Secret Access Key directly as kSecret
+	# (NOT prefixed like AWS's "AWS4"+sk). See:
+	# https://www.volcengine.com/docs/6369/67270
+	k_date = _sign(secret_key.encode("utf-8"), datestamp)
 	k_region = _sign(k_date, IMAGE_REGION)
 	k_service = _sign(k_region, IMAGE_SERVICE)
 	k_signing = _sign(k_service, "request")

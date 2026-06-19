@@ -2903,3 +2903,59 @@ All DeepSeek-migration-specific tests pass (6/6 LLMClientErrorTests). All pre-ex
 2. Redis/Celery/MinIO infrastructure not running in local test environment
 - 阿里云 DNS AccessKey 需具备 AliyunDNSFullAccess 权限
 - `certbot-dns-aliyun` 凭证文件不得提交到 git（已在 `.env` 之外独立管理）
+
+
+## Step 18: Image Generation Bug Fixes — COMPLETED (2026-06-19)
+
+### What was delivered
+
+- **Fixed 4 layered bugs** in the Volcengine Jimeng image generation pipeline that caused image generation to fail in both teaching and testing flows
+- **Bug 1**: `VOLCENGINE_IMAGE_API_KEY` missing from `settings.py` — key existed in `.env` but Django never read it
+- **Bug 2**: STS temporary credentials expired — replaced with long-term AccessKey and updated `_parse_image_api_key()` to support both formats
+- **Bug 3**: Incorrect Volcengine Signature V4 signing — removed `"VOLC"` prefix from signing key derivation (AWS-style, not used by Volcengine)
+- **Bug 4**: Celery worker container not restarted after `settings.py` fix — testing section uses Celery async tasks for image generation (unlike teaching which uses the synchronous web-container path). Worker ran 15-hour-old code without `VOLCENGINE_IMAGE_API_KEY`, causing all testing image tasks to fail with `ConfigurationError` while teaching images worked fine.
+
+### Root cause chain
+
+The four bugs masked each other in sequence:
+1. First: `settings.py` didn't load the key → "图像生成服务未配置"
+2. Then: old STS token expired → `InvalidSecretToken`
+3. Then: `"VOLC"` prefix in signing → `SignatureDoesNotMatch`
+4. Finally: Celery worker not restarted → testing section stuck at "情景配图生成中..."
+
+Only after fixing all four did image generation work in both teaching and testing flows.
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `dbt_platform/settings.py` | Added `VOLCENGINE_IMAGE_API_KEY = env("VOLCENGINE_IMAGE_API_KEY", default="")` |
+| `media_app/services.py:134-154` | `_parse_image_api_key()` now accepts 2-part (AK.SK) or 3-part (AK.SK.Token) format |
+| `media_app/services.py:247` | Removed `"VOLC"` prefix from Volcengine Signature V4 signing key derivation |
+| `.env` | Replaced expired STS key with long-term AccessKey (2-part format) |
+| `dbt-worker-1` (container) | Restarted to pick up `settings.py` and `services.py` code changes |
+| `testing/tasks.py` (indirect) | 4 test questions re-dispatched after worker restart |
+
+### IAM permission required
+
+Image generation needs `CVFullAccess` (Visual/CV service) on the Volcengine IAM user. Created user `dbt01` under main account `2108123365` with a long-term AccessKey.
+
+### Verification results
+
+| Check | Status |
+|-------|--------|
+| `VOLCENGINE_IMAGE_API_KEY` loaded in Django settings (158 chars, 2 parts) | PASS |
+| Volcengine Signature V4 HMAC-SHA256 signing (no `"VOLC"` prefix) | PASS |
+| Jimeng API submit + poll flow (task_id returned, image_urls populated) | PASS |
+| Teaching scene image generation (sync path) | PASS |
+| Testing scene image generation (Celery async path) | PASS |
+| Image URL returned from `p3-aiop-sign.byteimg.com` CDN | PASS |
+| `dbt-worker-1` container has `VOLCENGINE_IMAGE_API_KEY` loaded (len=108) | PASS |
+| All 4 stuck test questions re-dispatched and images generated | PASS |
+
+### Notes
+
+- Long-term AK.SK keys do not expire, eliminating the need for periodic STS token rotation
+- The signing key derivation uses raw Secret Access Key as `kSecret` — **NOT** prefixed like AWS (`"AWS4"+sk`)
+- The Volcengine image CDN (`byteimg.com`) triggers background tracking requests to `mcs.zijieapi.com/list` in browsers. These are blocked by CORS and harmless, but appear as DevTools noise. Future enhancement: proxy images through MinIO to eliminate CDN dependency.
+- **Deployment rule**: Any change to `settings.py`, `.env`, or shared service code requires restarting **both** `dbt-web-1` and `dbt-worker-1` containers. Web handles synchronous paths (teaching images), Celery worker handles async tasks (testing images).

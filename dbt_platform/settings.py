@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     "export_app",
     "reports",
     "media_app",
+    "ema_log",
 ]
 
 MIDDLEWARE = [
@@ -181,6 +182,10 @@ MINIMAX_BASE_URL = env("MINIMAX_BASE_URL", default="https://api.minimaxi.com")
 # API Key is shared across volcengine speech services (ASR + TTS).
 # Obtain from https://console.volcengine.com → 语音技术 → API Key管理 (new console)
 VOLCENGINE_API_KEY = env("VOLCENGINE_API_KEY", default="")
+
+# Image generation via Volcengine Jimeng (即梦文生图3.1)
+# STS format: AccessKeyId.SecretAccessKey.SessionToken
+VOLCENGINE_IMAGE_API_KEY = env("VOLCENGINE_IMAGE_API_KEY", default="")
 
 # TTS V3 API uses X-Api-Key + X-Api-Resource-Id (no appid needed).
 # Speaker ID for seed-tts-2.0 model (e.g., zh_female_shuangkuaisisi_moon_bigtts)

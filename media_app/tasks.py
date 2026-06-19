@@ -20,7 +20,7 @@ def generate_image_async(self, session_id: str, image_prompt: str):
     logger.info("Async image generation for session %s: %.80s...", session_id, image_prompt)
 
     try:
-        img_result = generate_image(image_prompt, n=1, aspect_ratio="1:1")
+        img_result = generate_image(image_prompt, n=1, width=1328, height=1328)
     except Exception as exc:
         logger.exception("Image generation failed for session %s", session_id)
         raise self.retry(exc=exc)

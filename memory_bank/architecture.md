@@ -1763,14 +1763,14 @@ Section 56 (Risk Detection During Testing, Step 8) previously stated that AI ass
 
 ### 73. media_app — File Structure and Responsibilities (Step 11)
 
-`media_app/` is a dedicated Django app for image generation (MiniMax), TTS (Volcengine 豆包语音合成模型2.0), and ASR (Volcengine). It is separate from teaching/testing to avoid circular imports — image/TTS/ASR are cross-cutting services consumed by both teaching and testing flows:
+`media_app/` is a dedicated Django app for image generation (Volcengine Jimeng 即梦文生图3.1), TTS (Volcengine 豆包语音合成模型2.0), and ASR (Volcengine). It is separate from teaching/testing to avoid circular imports — image/TTS/ASR are cross-cutting services consumed by both teaching and testing flows:
 
 ```
 media_app/
 ├── __init__.py
 ├── apps.py              # MediaAppConfig (AppConfig)
 ├── models.py            # 3 metadata log models (no binary file storage)
-├── services.py           # Image (MiniMax) + TTS/ASR (Volcengine) API clients
+├── services.py           # Image (Volcengine Jimeng) + TTS/ASR (Volcengine) API clients
 ├── views.py              # 3 endpoints returning HTMX/audio/JSON
 ├── urls.py               # Namespace "media", 3 URL patterns
 ├── admin.py              # 3 read-only admin classes
@@ -1779,60 +1779,47 @@ media_app/
     └── 0001_initial.py   # Applied with --fake (MongoDB)
 ```
 
-**API key sharing**: Image generation uses `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`. TTS and ASR share `VOLCENGINE_API_KEY` (set via `.env`). TTS additionally requires `VOLCENGINE_TTS_APP_ID` and `VOLCENGINE_TTS_CLUSTER` from the same volcengine speech app.
+**API key sharing**: Image generation uses `VOLCENGINE_IMAGE_API_KEY` (Volcengine Signature V4, AK.SK or AK.SK.Token STS format). TTS and ASR share `VOLCENGINE_API_KEY` (set via `.env`, X-Api-Key header auth). The image key is a separate credential from speech services — the Visual API uses HMAC-SHA256 signing, not API Key auth.
 
 **Error model**: `ConfigurationError(Exception)` for missing API keys; `APIError(Exception)` for non-200 status, timeout, and connection errors. Views catch both and return user-facing messages without crashing the session.
 
-### 74. Image Generation — Service and Data Flow (Step 11, Updated 2026-05-14)
+### 74. Image Generation — Volcengine Jimeng (即梦文生图3.1) (Step 11, Migrated 2026-06-18)
 
-**Service**: `media_app/services.py::generate_image(prompt, model="image-01", n=1, aspect_ratio="1:1")`
+**Service**: `media_app/services.py::generate_image(prompt, model="jimeng_t2i_v31", n=1, width=1328, height=1328, seed=-1, use_pre_llm=True)`
 
-**Default model** (`DEFAULT_IMAGE_MODEL`): `"image-01"` (corrected from `"image-01-live"` on 2026-05-13 — the user's Token Plan Hs_plus has 0 quota for `image-01-live`).
+**Provider**: Volcengine Visual API (`visual.volcengineapi.com`), region `cn-north-1`, service `cv`.
 
-Calls `POST {MINIMAX_BASE_URL}/v1/image/generation` with Bearer token auth and JSON body:
-```python
-{"model": "image-01", "prompt": prompt, "n": n, "aspect_ratio": aspect_ratio, "prompt_optimizer": True}
-```
+**Auth**: Volcengine Signature V4 (HMAC-SHA256) with AccessKey + SecretAccessKey. Supports both long-term keys (AK.SK, 2-part) and STS temporary credentials (AK.SK.SessionToken, 3-part). The session token is sent as `X-Security-Token` header. Unlike AWS, the signing key derivation uses the Secret Access Key directly as `kSecret` — no prefix (AWS uses `"AWS4"+sk`, Volcengine does NOT).
 
-`aspect_ratio` replaces former `size` parameter (MiniMax API uses `aspect_ratio`, not `size`). `prompt_optimizer: True` enables server-side prompt enhancement for better image quality.
+**API flow** (async submit + poll):
+1. **Submit**: `POST /?Action=CVSync2AsyncSubmitTask&Version=2022-08-31` with JSON body `{"req_key": "jimeng_t2i_v31", "prompt": "...", "seed": -1, "width": 1328, "height": 1328, "use_pre_llm": true}`
+2. **Poll**: `POST /?Action=CVSync2AsyncGetResult&Version=2022-08-31` every 2s (max 60 attempts = 120s) until `data.status == "done"`
+3. **Result**: `data.image_urls` list returned. View extracts `urls[0]`.
 
-Returns `{"urls": [...], "model": "...", "usage": {...}}`. View extracts `urls[0]` as the temporary image URL.
+**Internal retry**: Submit step retries transient HTTP errors (429/502/503/529) and API codes (50429 QPS limit, 50430 concurrent limit, 50511 post-img risk, 50519 copyright) with exponential backoff (2s → 4s → 8s, max 3 retries).
 
 **Two integration points**:
 
-1. **Teaching scene** — Button `🎨 生成教学配图` in teaching sidebar. JS `DBT_Image.generate()` POSTs to `/media/image/generate/` with `source="teaching_scene"` and `session_id`. View returns HTMX fragment (`<img src="...">`) rendered into `#teaching-image-area`.
+1. **Teaching scene** — SSE stream returns `image_prompt` in `done` event → frontend calls `DBT_Image.generate()` → POST `/media/image/generate/` → synchronous (blocking gunicorn worker ~25s, with 120s timeout). Returns HTMX fragment (`<img src="...">`).
 
-2. **Test question illustration** — Two paths:
-   - **Auto (Celery, staggered Step 14)**: `generate_test_questions_async` dispatches `generate_test_question_image_async` for questions with `image_prompt` using `apply_async(countdown=i*3)` to space requests 3s apart. Image URL saved to `TestQuestion.temporary_image_url`. Frontend polls `question_image_status_view` every 3s until ready.
-   - **Manual (async)**: "生成配图" button POSTs to `/testing/question/<id>/generate-image/`, which dispatches Celery task and returns polling spinner. For questions without `image_prompt`, a fallback prompt is constructed from question text.
-   - **Internal retry (Step 14)**: `generate_image()` in `media_app/services.py` retries transient HTTP errors (429, 502, 503, 529) with exponential backoff (2s → 4s → 8s, max 3 retries) before the Celery-level retry (30s delay) is triggered.
-   - **Manual (sync, regen)**: "🔄 重新生成配图" on existing images calls `DBT_Image.generate()` → synchronous `/media/image/generate/` (viable with 120s gunicorn timeout).
+2. **Test question illustration** — Celery async task `generate_test_question_image_async` fires after test creation. Frontend polls `/testing/question/<id>/image-status/` every 3s until `temporary_image_url` is populated.
 
-**Data flow** (async path):
-```
-Browser: hx-post to /testing/question/<id>/generate-image/
-  → testing.views.generate_question_image_view
-  → generate_test_question_image_async.delay(question_id)    # fire-and-forget via Redis
-  → Celery worker picks up task
-  → media_app.services.generate_image(prompt)
-  → MiniMax API POST /v1/image/generation
-  → TestQuestion.temporary_image_url updated in DB
-  → Browser polls /testing/question/<id>/image-status/ every 3s
-  → Image <img> returned when URL is set
-```
-
-**Data flow** (sync path, for regen):
+**Data flow** (sync teaching path):
 ```
 Browser JS (DBT_Image.generate)
   → POST /media/image/generate/ (HTMX, X-Requested-With)
   → media_app.views.generate_image_view
   → media_app.services.generate_image(prompt)
-  → MiniMax API POST /v1/image/generation
+      → _parse_image_api_key() — validates settings.VOLCENGINE_IMAGE_API_KEY
+      → _volcengine_sign_headers() — Volcengine Signature V4
+      → Submit task → poll 60×2s for result
   → ImageGenerationLog.objects.create(status="success", ...)
-  → Returns HTMX fragment: <img src="..." class="...">
+  → Returns HTMX fragment: <img src="https://p3-aiop-sign.byteimg.com/..." class="...">
 ```
 
-**PRD compliance**: Image files are NOT persisted. Only the temporary CDN URL (which expires) is stored in `ImageGenerationLog.temporary_image_url` and `TestQuestion.temporary_image_url`. The log preserves prompt, model, status, and timestamp for audit.
+**PRD compliance**: Image files are NOT persisted. Only the temporary CDN URL (from `byteimg.com`, with `x-expires` parameter) is stored. The log preserves prompt, model, status, and timestamp for audit.
+
+**⚠️ Known side effect**: The Volcengine CDN image URL (`byteimg.com`) triggers background tracking requests to `mcs.zijieapi.com/list` in the browser. These are blocked by CORS and harmless, but appear as noise in DevTools network tab. See §104 for details.
 
 ### 74b. Async Image Generation via Celery (Updated 2026-05-14)
 
@@ -2763,3 +2750,49 @@ _playAudioBlob (已缓存的 blob — 即时播放)
 | `templates/base.html` | Footer displays ICP备案号 豫ICP备2026025419号 |
 | `.env` | Production domain config (DJANGO_ALLOWED_HOSTS, EXTERNAL_BASE_URL, CSRF_TRUSTED_ORIGINS) |
 | `.env.example` | Updated production examples with domain-specific values |
+
+---
+
+### §104 Volcengine Jimeng Image Generation — Post-Migration Bug Fixes (2026-06-19)
+
+Four interconnected bugs were discovered after the MiniMax→Volcengine Jimeng migration (commit `df285f7`). They were masked in layers: each fix exposed the next.
+
+**Bug 1: Missing Django setting — `VOLCENGINE_IMAGE_API_KEY` not loaded**
+
+- **Symptom**: "图像生成服务未配置，请联系管理员。"
+- **Root cause**: `.env` had `VOLCENGINE_IMAGE_API_KEY` set, but `settings.py` never read it via `env("VOLCENGINE_IMAGE_API_KEY", default="")`. The service code used `getattr(settings, "VOLCENGINE_IMAGE_API_KEY", "")` which always returned `""`.
+- **Fix**: Added `VOLCENGINE_IMAGE_API_KEY = env("VOLCENGINE_IMAGE_API_KEY", default="")` to `dbt_platform/settings.py` (line 188, in the Volcengine section).
+- **Prevention pattern**: Every env var consumed by `getattr(settings, ...)` must have a corresponding `env(...)` line in `settings.py`. `environ.Env.read_env()` only loads vars into the OS environment, not into Django settings.
+
+**Bug 2: Expired STS temporary credentials**
+
+- **Symptom**: API returned 401 `{"Code":"InvalidSecretToken","Message":"secret token sequence is broken."}`
+- **Root cause**: `.env` `VOLCENGINE_IMAGE_API_KEY` used STS format (`AK.SK.SessionToken`). STS tokens expire after hours. The original token from the initial setup had expired.
+- **Fix**: Generated a long-term AccessKey (AK.SK, 2-part format) from Volcengine IAM console. Updated `.env` and modified `_parse_image_api_key()` to support both 2-part (long-term) and 3-part (STS) formats.
+- **Permission required**: `CVFullAccess` (Visual/CV service read+write) on the target IAM user.
+
+**Bug 3: Incorrect Signature V4 signing key derivation — `"VOLC"` prefix**
+
+- **Symptom**: API returned 401 `{"Code":"SignatureDoesNotMatch","Message":"The request signature we calculated does not match..."}`
+- **Root cause**: The signing key derivation in `_volcengine_sign_headers()` used `("VOLC" + secret_key)` as `kSecret`, following the AWS Signature V4 pattern (`"AWS4"+sk`). **Volcengine Signature V4 does NOT prefix the secret key** — the raw Secret Access Key is used directly as `kSecret`.
+- **Fix**: Changed line 247 from `_sign(("VOLC" + secret_key).encode("utf-8"), datestamp)` to `_sign(secret_key.encode("utf-8"), datestamp)`.
+- **Reference**: Volcengine official docs — signing key derivation starts with `kSecret = <Your Secret Access Key>` (no prefix).
+- **Why this was masked**: Bug 1 (missing setting) was caught first, then Bug 2 (expired STS token) blocked before the signing step. Only after fixing both did the request reach the API signature validation, exposing Bug 3.
+
+**Bug 4: Celery worker container not restarted after `settings.py` change**
+
+- **Symptom**: Testing section image generation stuck at "情景配图生成中..." with continuous polling to `/testing/question/{id}/image-status/` returning 200 but never showing an image. Teaching section continued to work normally.
+- **Root cause**: After adding `VOLCENGINE_IMAGE_API_KEY` to `settings.py`, only the web container (`dbt-web-1`) was restarted. The Celery worker container (`dbt-worker-1`) was not restarted, so its gunicorn workers still ran the old code without the setting. Testing uses `generate_test_question_image_async` Celery tasks dispatched by `generate_test_questions_async`, while teaching uses the synchronous `/media/image/generate/` endpoint handled by the web container.
+- **Why this was masked**: Bugs 1-3 were tested exclusively on the teaching section (synchronous path through web container). The testing section (asynchronous Celery path through worker container) was not tested after the fixes. The worker log clearly showed `ConfigurationError: VOLCENGINE_IMAGE_API_KEY is not set` from tasks that exhausted all retries.
+- **Fix**: Restarted `dbt-worker-1` container, then re-dispatched Celery tasks for the 4 stuck test questions that had permanently failed (retries exhausted).
+- **Prevention**: Any change to `settings.py`, `.env`, or shared service code requires restarting **both** `dbt-web-1` and `dbt-worker-1` containers, since they run independent gunicorn/Celery processes from the same image but only fork at container start.
+
+**Modified files**:
+| File | Change |
+|------|--------|
+| `dbt_platform/settings.py` | Added `VOLCENGINE_IMAGE_API_KEY = env("VOLCENGINE_IMAGE_API_KEY", default="")` |
+| `media_app/services.py:134-154` | `_parse_image_api_key()` now accepts 2-part or 3-part format |
+| `media_app/services.py:247` | Removed `"VOLC"` prefix from signing key derivation |
+| `.env` | Replaced expired STS key with long-term AK.SK |
+
+**Verification**: Image generation confirmed working. API calls succeed: `Jimeng image generation complete: task_id=..., urls=1`.
