@@ -109,14 +109,25 @@ def _celery_metrics() -> dict[str, Any]:
         "queue_length": queues.get("celery", 0),
         "active_tasks": 0,
         "image_slots": {"interactive": 0, "batch": 0},
+        "image_fail_count": 0,
+        "image_slot_saturated_seconds": {"interactive": None, "batch": None},
     }
 
     try:
-        from media_app.concurrency import get_active_slot_count
+        from media_app.concurrency import (
+            get_active_slot_count,
+            get_image_fail_count,
+            track_slot_saturation,
+        )
 
         metrics["image_slots"] = {
             "interactive": get_active_slot_count("interactive"),
             "batch": get_active_slot_count("batch"),
+        }
+        metrics["image_fail_count"] = get_image_fail_count()
+        metrics["image_slot_saturated_seconds"] = {
+            "interactive": track_slot_saturation("interactive"),
+            "batch": track_slot_saturation("batch"),
         }
     except Exception as exc:
         logger.debug("Image slot metrics skipped: %s", exc)
@@ -186,6 +197,38 @@ def _build_alerts(checks: dict[str, str], celery: dict[str, Any]) -> list[dict[s
             "message": "Legacy 'images' queue still draining — migrate workers to interactive-images",
             "value": legacy_images,
             "threshold": 0,
+        })
+
+    interactive_saturated = celery.get("image_slot_saturated_seconds", {}).get("interactive")
+    interactive_depth = queue_map.get("interactive-images", 0)
+    interactive_slots = celery.get("image_slots", {}).get("interactive", 0)
+    interactive_max = int(getattr(settings, "IMAGE_INTERACTIVE_MAX_CONCURRENT", 3))
+    if (
+        interactive_slots >= interactive_max
+        and interactive_depth > 0
+        and interactive_saturated is not None
+        and interactive_saturated >= 60
+    ):
+        alerts.append({
+            "level": "warning",
+            "metric": "image_interactive_saturated",
+            "message": "Interactive image slots saturated with backlog for >= 60s",
+            "value": {
+                "slots": interactive_slots,
+                "queue_depth": interactive_depth,
+                "saturated_seconds": round(interactive_saturated, 1),
+            },
+            "threshold": 60,
+        })
+
+    fail_count = int(celery.get("image_fail_count", 0) or 0)
+    if fail_count >= 20:
+        alerts.append({
+            "level": "warning",
+            "metric": "image_fail_count",
+            "message": "Elevated image generation failures in the last 24h",
+            "value": fail_count,
+            "threshold": 20,
         })
 
     # Backward-compatible alert id for default celery queue

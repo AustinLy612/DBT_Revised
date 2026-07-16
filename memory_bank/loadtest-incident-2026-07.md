@@ -92,18 +92,34 @@
 
 ---
 
+## 2026-07-17 复测（8C32G + Agent Plan + 槽位等待修复）
+
+| Phase | 结果 | 备注 |
+|-------|------|------|
+| D — 15 路 SSE | **15/15**，p95 ≈ 11.0s | 通过 |
+| E — 混合 | **90/90** | 通过 |
+| F1 — 5 路配图 | **5/5**，p95 ≈ 48s | 通过 |
+| F2 — 10 路配图 | **10/10**，p95 ≈ 103s | 通过（< 180s） |
+| G — 15 人出题 | **15/15**，p95 ≈ 52s | 通过；配图 0 仍为按需预期 |
+
+`overall_pass: false` 仅因 Phase G `test_images_progress`（压测未打开题目页）。**D/E/F 与 G 出题均已达标**，主机未冻结。
+
+配置基线：`interactive=3`、`batch=1`、Agent Plan `/api/plan/v3` + `doubao-seedream-5.0-lite` + `2K`。
+
+---
+
 ## 待办 / 未验证项
 
 | 项 | 状态 |
 |----|------|
-| Phase F 在 web 重启后复测 | 待验证 |
-| 完整扩展压测 `overall_pass` | 待稳定环境后重跑 |
-| `worker-questions` concurrency 调优 | 建议降至 1–2，尚未改配置 |
+| Phase F 在 web 重启后复测 | **已通过**（5/5、10/10） |
+| D–G 文字/配图主路径 | **已通过**（除按需配图指标） |
+| `worker-questions` concurrency 调优 | 可选；当前 8C32G + concurrency=4 可用 |
 | Phase G 压测脚本适配按需配图 | 可选：增加浏览题目步骤 |
 
 ---
 
 ## 相关文档
 
-- [capacity-improvements.md](./capacity-improvements.md) — 已落地改进细节
+- [capacity-improvements.md](./capacity-improvements.md) — 已落地改进细节（含 Agent Plan）
 - [test-database-isolation.md](./test-database-isolation.md) — 测试库安全（与压测数据准备无关）

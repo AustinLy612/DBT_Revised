@@ -316,6 +316,13 @@ class LoadTestClient:
                 if poll.status_code == 200 and '<img' in poll.text and 'src="' in poll.text:
                     elapsed = (time.perf_counter() - t0) * 1000
                     return RequestResult(label, user_id, poll.status_code, elapsed, True)
+                if poll.status_code == 200 and (
+                    "配图失败" in poll.text
+                    or "排队超时" in poll.text
+                    or "重新生成配图" in poll.text
+                ) and "hx-trigger=\"every 3s\"" not in poll.text:
+                    elapsed = (time.perf_counter() - t0) * 1000
+                    return RequestResult(label, user_id, poll.status_code, elapsed, False, "image_failed")
                 time.sleep(3)
 
             elapsed = (time.perf_counter() - t0) * 1000

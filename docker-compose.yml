@@ -45,7 +45,7 @@ services:
   worker-images:
     image: dbt-worker:latest
     build: .
-    command: celery -A dbt_platform worker --loglevel=info --concurrency=4 -Q interactive-images,batch-images,images
+    command: celery -A dbt_platform worker --loglevel=info --concurrency=4 --prefetch-multiplier=1 -Q interactive-images,batch-images,images
     volumes:
       - .:/app
       - ./logs:/app/logs

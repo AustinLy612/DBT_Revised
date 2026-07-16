@@ -1225,13 +1225,15 @@ class TeachingImageAsyncTests(TestCase):
             content="让我们一起练习呼吸。", image_prompt="学生在教室里做深呼吸，温暖插画风格",
         )
 
-    @patch("media_app.tasks.generate_image_async.delay")
-    def test_stream_dispatch_triggers_celery(self, mock_delay):
+    @patch("media_app.tasks.generate_image_async.apply_async")
+    def test_stream_dispatch_triggers_celery(self, mock_apply):
         from .views import _start_image_generation
         _start_image_generation(self.session, self.message.image_prompt, self.message.message_id)
-        mock_delay.assert_called_once_with(
-            self.session.session_id, self.message.image_prompt, message_id=self.message.message_id,
-        )
+        mock_apply.assert_called_once()
+        kwargs = mock_apply.call_args.kwargs
+        self.assertEqual(kwargs["args"], [self.session.session_id, self.message.image_prompt])
+        self.assertEqual(kwargs["kwargs"]["message_id"], self.message.message_id)
+        self.assertEqual(kwargs["queue"], "interactive-images")
 
     def test_message_image_status_returns_spinner_while_pending(self):
         from media_app.concurrency import set_image_status
@@ -1241,15 +1243,27 @@ class TeachingImageAsyncTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("排队中", response.content.decode())
 
-    @patch("media_app.tasks.generate_scene_image_async.delay")
-    def test_generate_scene_image_dispatches_task(self, mock_delay):
+    @patch("media_app.tasks.generate_scene_image_async.apply_async")
+    def test_generate_scene_image_dispatches_task(self, mock_apply):
         url = reverse("teaching:generate_scene_image", args=[self.session.session_id])
         response = self.client.post(url, {"prompt": "正念教室场景"})
         self.assertEqual(response.status_code, 200)
-        mock_delay.assert_called_once()
-        args = mock_delay.call_args[0]
+        mock_apply.assert_called_once()
+        args = mock_apply.call_args.kwargs["args"]
         self.assertEqual(args[0], self.session.session_id)
         self.assertEqual(args[1], "正念教室场景")
         self.assertTrue(args[2])
         self.assertIn("job_id=", response.content.decode())
         self.assertIn("data-job-id=", response.content.decode())
+
+    def test_scene_image_status_shows_failed_and_stops_polling(self):
+        from media_app.concurrency import mark_image_failed
+        job_id = "11111111-1111-1111-1111-111111111111"
+        mark_image_failed(f"scene:{self.session.session_id}:{job_id}", "配图排队超时，请稍后重试")
+        url = reverse("teaching:scene_image_status", args=[self.session.session_id]) + f"?job_id={job_id}"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn("配图排队超时", content)
+        self.assertIn("重新生成配图", content)
+        self.assertNotIn("hx-trigger=\"every 3s\"", content)

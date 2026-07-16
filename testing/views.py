@@ -355,9 +355,7 @@ def generate_question_image_view(request: HttpRequest, question_id: str) -> Http
 
     # Dispatch Celery task if no image yet
     if not question.temporary_image_url:
-        from media_app.concurrency import set_image_status
-        set_image_status(question_id, "queued")
-        generate_test_question_image_async.delay(question_id)
+        ensure_question_image_dispatched(question, force=True)
 
     return _image_polling_html(question_id)
 
@@ -365,25 +363,48 @@ def generate_question_image_view(request: HttpRequest, question_id: str) -> Http
 @profile_required
 def question_image_status_view(request: HttpRequest, question_id: str) -> HttpResponse:
     """HTMX polling endpoint — returns image HTML when ready, or spinner."""
+    from media_app.concurrency import get_image_error, get_image_status
+
     question = get_object_or_404(TestQuestion, question_id=question_id)
 
     if question.temporary_image_url:
+        retry_url = reverse("testing:retry_question_image", kwargs={"question_id": question_id})
         return HttpResponse(
             '<div class="mb-4">'
             f'<img src="{question.temporary_image_url}" alt="题目配图" '
             'class="w-full max-w-md rounded-lg shadow" loading="lazy">'
-            '<button onclick="DBT_Image.generate(\''
-            f'{question.image_prompt.replace(chr(39), "&#39;")}'
-            '\', \'question-image-area\', '
-            '{source: \'test_illustration\', '
-            f'test_question_id: \'{question_id}\'}})" '
+            f'<button hx-post="{retry_url}" hx-swap="outerHTML" hx-target="closest div" '
             'class="mt-2 text-xs text-purple-500 hover:text-purple-700 underline">'
-            '🔄 重新生成配图'
+            '重新生成配图'
             '</button>'
             '</div>'
         )
 
+    status = get_image_status(question_id)
+    if status == "failed":
+        retry_url = reverse("testing:retry_question_image", kwargs={"question_id": question_id})
+        return _image_failed_html(
+            get_image_error(question_id) or "配图失败，请稍后重试",
+            retry_url,
+        )
+
     ensure_question_image_dispatched(question)
+    return _image_polling_html(question_id)
+
+
+@profile_required
+def retry_question_image_view(request: HttpRequest, question_id: str) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+    from media_app.concurrency import clear_image_status
+
+    question = get_object_or_404(TestQuestion, question_id=question_id)
+    if not question.image_prompt:
+        return _htmx_error("无法重试：缺少图片描述。")
+    clear_image_status(question_id)
+    question.temporary_image_url = ""
+    question.save(update_fields=["temporary_image_url"])
+    ensure_question_image_dispatched(question, force=True)
     return _image_polling_html(question_id)
 
 
@@ -400,6 +421,16 @@ def _image_polling_html(question_id: str) -> HttpResponse:
     )
 
 
+def _image_failed_html(message: str, retry_url: str) -> HttpResponse:
+    return HttpResponse(
+        '<div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-center">'
+        f'<p class="text-xs text-red-600 mb-2">{message}</p>'
+        f'<button hx-post="{retry_url}" hx-swap="outerHTML" hx-target="closest div" '
+        'class="text-xs text-purple-600 hover:text-purple-800 underline">'
+        '重新生成配图</button></div>'
+    )
+
+
 # ═══════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════
@@ -410,7 +441,26 @@ def _htmx_error(message: str) -> HttpResponse:
     )
 
 
-def ensure_question_image_dispatched(question: TestQuestion) -> None:
+def _test_image_budget_used(test) -> int:
+    from media_app.concurrency import get_image_status
+
+    used = 0
+    for q in TestQuestion.objects.filter(test=test).only("question_id", "temporary_image_url", "image_prompt"):
+        if not q.image_prompt:
+            continue
+        if q.temporary_image_url or get_image_status(q.question_id) in ("queued", "processing"):
+            used += 1
+    return used
+
+
+def _test_image_budget_remaining(test) -> int:
+    from django.conf import settings
+
+    max_images = int(getattr(settings, "TEST_IMAGE_MAX_PER_TEST", 2))
+    return max(0, max_images - _test_image_budget_used(test))
+
+
+def ensure_question_image_dispatched(question: TestQuestion, *, force: bool = False) -> None:
     """Dispatch image generation for the current question only (on-demand)."""
     if not question.image_prompt or question.temporary_image_url:
         return
@@ -418,8 +468,15 @@ def ensure_question_image_dispatched(question: TestQuestion) -> None:
 
     if get_image_status(question.question_id) in ("queued", "processing"):
         return
+    if not force and _test_image_budget_remaining(question.test) <= 0:
+        return
     set_image_status(question.question_id, "queued")
-    generate_test_question_image_async.delay(question.question_id)
+    generate_test_question_image_async.apply_async(
+        args=[question.question_id],
+        kwargs={"slot_kind": "interactive"},
+        queue="interactive-images",
+        priority=7,
+    )
 
 
 def prefetch_question_image(question: TestQuestion) -> None:
@@ -430,10 +487,14 @@ def prefetch_question_image(question: TestQuestion) -> None:
 
     if get_image_status(question.question_id) in ("queued", "processing"):
         return
+    # Keep room for the current interactive image: only prefetch when budget has spare capacity.
+    if _test_image_budget_remaining(question.test) <= 0:
+        return
     set_image_status(question.question_id, "queued")
     generate_test_question_image_async.apply_async(
         args=[question.question_id],
         kwargs={"slot_kind": "batch"},
         queue="batch-images",
         countdown=2,
+        priority=1,
     )

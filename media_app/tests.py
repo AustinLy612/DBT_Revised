@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
@@ -60,13 +61,13 @@ class ImageGenerationLogModelTests(TestCase):
         log = ImageGenerationLog.objects.create(
             user=user,
             prompt="一只可爱的猫",
-            model="doubao-seedream-5-0-lite-260128",
+            model="doubao-seedream-5.0-lite",
             temporary_image_url="https://example.com/img.png",
             status=ImageGenerationLog.Status.SUCCESS,
             source="manual",
         )
         self.assertEqual(log.status, "success")
-        self.assertEqual(log.model, "doubao-seedream-5-0-lite-260128")
+        self.assertEqual(log.model, "doubao-seedream-5.0-lite")
         self.assertIn("猫", log.prompt)
         self.assertIsNotNone(log.created_at)
 
@@ -191,11 +192,20 @@ class ImageGenerationServiceTests(TestCase):
         mock_session.return_value = mock_sess
 
         with self._apply_sleep_patch():
-            result = services.generate_image("夕阳下的海滩")
+            with patch.object(services.settings, "ARK_IMAGE_BASE_URL", "https://ark.cn-beijing.volces.com/api/plan/v3"):
+                with patch.object(services.settings, "ARK_IMAGE_MODEL", "doubao-seedream-5.0-lite"):
+                    with patch.object(services.settings, "ARK_IMAGE_SIZE", "2K"):
+                        result = services.generate_image("夕阳下的海滩")
 
         self.assertEqual(len(result["urls"]), 1)
         self.assertIn("cdn.example.com", result["urls"][0])
-        self.assertEqual(result["model"], "doubao-seedream-5-0-lite-260128")
+        self.assertEqual(result["model"], "doubao-seedream-5.0-lite")
+        called_url = mock_sess.post.call_args.args[0]
+        self.assertIn("/api/plan/v3/images/generations", called_url)
+        body = mock_sess.post.call_args.kwargs["json"]
+        self.assertEqual(body["model"], "doubao-seedream-5.0-lite")
+        self.assertEqual(body["size"], "2K")
+        self.assertEqual(body["output_format"], "png")
 
     @patch("media_app.services._get_ark_api_key", return_value="ark-test-key")
     @patch("media_app.services._get_session")
@@ -402,31 +412,33 @@ class ImageGenerationViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("请输入图片描述", resp.content.decode())
 
-    @patch("media_app.views.services.generate_image")
-    def test_success_returns_image_html(self, mock_gen):
-        mock_gen.return_value = {
+    @patch("media_app.concurrency.try_acquire_image_slot", return_value=True)
+    @patch("media_app.concurrency.run_with_image_slot")
+    def test_success_returns_image_html(self, mock_run, _mock_acquire):
+        mock_run.side_effect = lambda resource_id, fn, kind="interactive": {
             "urls": ["https://cdn.example.com/img.png"],
-            "model": "doubao-seedream-5-0-lite-260128",
+            "model": "doubao-seedream-5.0-lite",
             "usage": {},
         }
         resp = self.client.post(self.url, {
             "prompt": "美丽的风景画",
-            "model": "doubao-seedream-5-0-lite-260128",
+            "model": "doubao-seedream-5.0-lite",
             "source": "teaching_scene",
         })
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
         self.assertIn("cdn.example.com", content)
-        self.assertIn("doubao-seedream-5-0-lite-260128", content)
+        self.assertIn("doubao-seedream-5.0-lite", content)
         # Verify ImageGenerationLog created
         self.assertEqual(ImageGenerationLog.objects.count(), 1)
         log = ImageGenerationLog.objects.first()
         self.assertEqual(log.status, "success")
         self.assertEqual(log.source, "teaching_scene")
 
-    @patch("media_app.views.services.generate_image")
-    def test_api_error_returns_error_message(self, mock_gen):
-        mock_gen.side_effect = services.APIError("Service unavailable")
+    @patch("media_app.concurrency.try_acquire_image_slot", return_value=True)
+    @patch("media_app.concurrency.run_with_image_slot")
+    def test_api_error_returns_error_message(self, mock_run, _mock_acquire):
+        mock_run.side_effect = services.APIError("Service unavailable")
         resp = self.client.post(self.url, {"prompt": "test"})
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
@@ -435,15 +447,17 @@ class ImageGenerationViewTests(TestCase):
         log = ImageGenerationLog.objects.first()
         self.assertEqual(log.status, "failed")
 
-    @patch("media_app.views.services.generate_image")
-    def test_no_url_returns_error(self, mock_gen):
-        mock_gen.return_value = {"urls": [], "model": "doubao-seedream-5-0-lite-260128", "usage": {}}
+    @patch("media_app.concurrency.try_acquire_image_slot", return_value=True)
+    @patch("media_app.concurrency.run_with_image_slot")
+    def test_no_url_returns_error(self, mock_run, _mock_acquire):
+        mock_run.return_value = {"urls": [], "model": "doubao-seedream-5.0-lite", "usage": {}}
         resp = self.client.post(self.url, {"prompt": "test"})
         self.assertIn("未返回图片", resp.content.decode())
 
-    @patch("media_app.views.services.generate_image")
-    def test_config_error_returns_message(self, mock_gen):
-        mock_gen.side_effect = services.ConfigurationError("no key")
+    @patch("media_app.concurrency.try_acquire_image_slot", return_value=True)
+    @patch("media_app.concurrency.run_with_image_slot")
+    def test_config_error_returns_message(self, mock_run, _mock_acquire):
+        mock_run.side_effect = services.ConfigurationError("no key")
         resp = self.client.post(self.url, {"prompt": "test"})
         self.assertIn("未配置", resp.content.decode())
 
@@ -926,7 +940,37 @@ class ImageConcurrencyGuardTests(TestCase):
         client.incr.side_effect = [1, 3, 2]
         client.decr.return_value = 1
         mock_redis_factory.return_value = client
-        self.assertTrue(concurrency.try_acquire_image_slot())
-        self.assertFalse(concurrency.try_acquire_image_slot())
-        concurrency.release_image_slot()
-        self.assertTrue(concurrency.try_acquire_image_slot())
+        with self.settings(IMAGE_INTERACTIVE_MAX_CONCURRENT=2):
+            self.assertTrue(concurrency.try_acquire_image_slot())
+            self.assertFalse(concurrency.try_acquire_image_slot())
+            concurrency.release_image_slot()
+            self.assertTrue(concurrency.try_acquire_image_slot())
+
+    @patch("media_app.tasks.generate_scene_image_async.apply_async")
+    @patch("media_app.tasks.try_acquire_image_slot", return_value=False)
+    def test_slot_wait_redispatches_without_provider_retry(self, _mock_acquire, mock_apply):
+        from media_app.tasks import generate_scene_image_async
+
+        generate_scene_image_async(
+            "session-1",
+            "prompt",
+            "job-1",
+            wait_started_at=time.time(),
+        )
+        mock_apply.assert_called_once()
+        self.assertEqual(mock_apply.call_args.kwargs["queue"], "interactive-images")
+        self.assertIn("wait_started_at", mock_apply.call_args.kwargs["kwargs"])
+
+    @patch("media_app.tasks.mark_image_failed")
+    @patch("media_app.tasks.try_acquire_image_slot", return_value=False)
+    def test_slot_wait_timeout_marks_failed(self, _mock_acquire, mock_failed):
+        from media_app.tasks import generate_scene_image_async
+
+        generate_scene_image_async(
+            "session-1",
+            "prompt",
+            "job-1",
+            wait_started_at=time.time() - 1000,
+        )
+        mock_failed.assert_called_once()
+        self.assertIn("排队超时", mock_failed.call_args.args[1])

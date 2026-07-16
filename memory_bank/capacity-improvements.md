@@ -176,12 +176,57 @@ scripts/loadtest_15users.py   # job_id 解析、生产 guard
 
 ---
 
+## 步骤 6 — Agent Plan 配图可靠性（2026-07-17）
+
+### 6.1 Agent Plan API
+
+| 配置 | 值 |
+|------|-----|
+| Base URL | `https://ark.cn-beijing.volces.com/api/plan/v3` |
+| Endpoint | `POST /images/generations` |
+| Model | `doubao-seedream-5.0-lite` |
+| Size | `2K`（Agent Plan 官方最低规格；不支持 1024） |
+| Key | `ARK_AGENT_PLAN_API_KEY`（`.env`，不入库） |
+
+### 6.2 槽位等待与失败终态
+
+- 槽位等待通过 **重新 `apply_async`** 排队，**不消耗** Celery provider `max_retries`。
+- 等待超时默认 120s → Redis `failed` + UI 停止轮询并提供异步重试。
+- Provider 失败（429/5xx/超时）单独指数退避，最多 3 次后写 `failed`。
+- 同步 `/media/image/generate/` 纳入 interactive 槽位，避免绕过限流。
+
+### 6.3 容量与优先级
+
+| 参数 | 值 |
+|------|----|
+| `IMAGE_INTERACTIVE_MAX_CONCURRENT` | 3 |
+| `IMAGE_BATCH_MAX_CONCURRENT` | 1 |
+| `worker-images` | `--concurrency=4 --prefetch-multiplier=1` |
+| Celery priority | interactive 场景图 9 / 教学图 8 / 当前题 7 / batch 预取 1 |
+
+### 6.4 体验与成本
+
+- 教学：每步骤最多 1 张、每会话最多 3 张；提示词仅在明确场景想象/角色扮演时生成 `image_prompt`。
+- 测试：每场测试最多 2 张图（当前题 interactive + 下一题 batch 预取）。
+- SSE 文本完成与消息持久化隔离于配图派发异常。
+
+### 6.5 验证结果（8C32G）
+
+- 单张 Agent Plan 冒烟：成功。
+- Phase F1：**5/5**，p95 ≈ 48s；Phase F2：**10/10**，p95 ≈ 103–106s。
+- 扩展 D–G：D/E/F 全通过；G 出题 15/15；`question_images_ready=0` 仍为按需设计预期。
+- 出题 `questions_with_image_prompt` 从约 64 降至约 22，说明提示词成本控制生效。
+
+---
+
 ## 验证
 
 针对性单元测试（2026-07 改动后已通过）：
 
 ```bash
 python manage.py test dbt_platform.tests.MetricsCheckTests \
+  media_app.tests.ImageGenerationServiceTests \
+  media_app.tests.ImageConcurrencyGuardTests \
   testing.tests.ImageTaskDispatchTests \
   teaching.tests.TeachingImageAsyncTests
 ```

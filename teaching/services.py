@@ -463,6 +463,7 @@ def _generate_opening_message(
         role=ChatMessage.Role.ASSISTANT,
         content=content_dict["content"],
         image_prompt=content_dict.get("image_prompt", ""),
+        teaching_step=1,
     )
 
     if content_dict.get("source_chunk_ids"):
@@ -543,6 +544,7 @@ def generate_teaching_response(
         role=ChatMessage.Role.ASSISTANT,
         content=content_dict["content"],
         image_prompt=content_dict.get("image_prompt", ""),
+        teaching_step=current_step,
     )
 
     if content_dict.get("source_chunk_ids"):

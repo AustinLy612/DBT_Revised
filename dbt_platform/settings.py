@@ -157,6 +157,11 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "Asia/Shanghai"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "queue_order_strategy": "priority",
+}
+CELERY_TASK_DEFAULT_PRIORITY = 5
+CELERY_TASK_QUEUE_MAX_PRIORITY = 10
 
 CELERY_TASK_ROUTES = {
     "media_app.tasks.generate_image_async": {"queue": "interactive-images"},
@@ -175,8 +180,17 @@ CELERY_MONITOR_QUEUES = (
     "images",
 )
 IMAGE_MAX_CONCURRENT = env.int("IMAGE_MAX_CONCURRENT", default=4)
-IMAGE_INTERACTIVE_MAX_CONCURRENT = env.int("IMAGE_INTERACTIVE_MAX_CONCURRENT", default=2)
-IMAGE_BATCH_MAX_CONCURRENT = env.int("IMAGE_BATCH_MAX_CONCURRENT", default=2)
+IMAGE_INTERACTIVE_MAX_CONCURRENT = env.int("IMAGE_INTERACTIVE_MAX_CONCURRENT", default=3)
+IMAGE_BATCH_MAX_CONCURRENT = env.int("IMAGE_BATCH_MAX_CONCURRENT", default=1)
+IMAGE_SLOT_WAIT_TIMEOUT_SECONDS = env.int("IMAGE_SLOT_WAIT_TIMEOUT_SECONDS", default=120)
+IMAGE_SLOT_WAIT_INTERVAL_SECONDS = env.int("IMAGE_SLOT_WAIT_INTERVAL_SECONDS", default=3)
+IMAGE_PROVIDER_MAX_RETRIES = env.int("IMAGE_PROVIDER_MAX_RETRIES", default=3)
+TEACHING_IMAGE_MAX_PER_STEP = env.int("TEACHING_IMAGE_MAX_PER_STEP", default=1)
+TEACHING_IMAGE_MAX_PER_SESSION = env.int("TEACHING_IMAGE_MAX_PER_SESSION", default=3)
+TEST_IMAGE_MAX_PER_TEST = env.int("TEST_IMAGE_MAX_PER_TEST", default=2)
+CELERY_WORKER_PREFETCH_MULTIPLIER = env.int("CELERY_WORKER_PREFETCH_MULTIPLIER", default=1)
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
 
 # ── MinIO ──
 MINIO_ENDPOINT = env("MINIO_ENDPOINT", default="localhost:9000")
@@ -203,16 +217,19 @@ MINIMAX_BASE_URL = env("MINIMAX_BASE_URL", default="https://api.minimaxi.com")
 # Obtain from https://console.volcengine.com → 语音技术 → API Key管理 (new console)
 VOLCENGINE_API_KEY = env("VOLCENGINE_API_KEY", default="")
 
-# Image generation via Volcengine Ark Seedream 5.0 Lite
+# Image generation via Volcengine Ark Agent Plan (Seedream 5.0 Lite)
+# Must use Agent Plan dedicated API key + /api/plan/v3 base URL.
+ARK_AGENT_PLAN_API_KEY = env("ARK_AGENT_PLAN_API_KEY", default="")
+# Backward-compatible fallback for older deployments.
 ARK_API_KEY = env("ARK_API_KEY", default="")
 ARK_IMAGE_BASE_URL = env(
-    "ARK_IMAGE_BASE_URL", default="https://ark.cn-beijing.volces.com/api/v3"
+    "ARK_IMAGE_BASE_URL",
+    default="https://ark.cn-beijing.volces.com/api/plan/v3",
 )
-ARK_IMAGE_MODEL = env(
-    "ARK_IMAGE_MODEL", default="doubao-seedream-5-0-lite-260128"
-)
+ARK_IMAGE_MODEL = env("ARK_IMAGE_MODEL", default="doubao-seedream-5.0-lite")
+ARK_IMAGE_SIZE = env("ARK_IMAGE_SIZE", default="2K")
 
-# Deprecated: Jimeng Visual API (replaced by Ark Seedream)
+# Deprecated: Jimeng Visual API / non-plan Ark keys
 VOLCENGINE_IMAGE_API_KEY = env("VOLCENGINE_IMAGE_API_KEY", default="")
 
 # TTS V3 API uses X-Api-Key + X-Api-Resource-Id (no appid needed).

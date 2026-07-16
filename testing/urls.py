@@ -21,4 +21,9 @@ urlpatterns = [
         views.question_image_status_view,
         name="question_image_status",
     ),
+    path(
+        "question/<slug:question_id>/retry-image/",
+        views.retry_question_image_view,
+        name="retry_question_image",
+    ),
 ]

@@ -93,14 +93,15 @@ def _tts_cache_set(text: str, voice: str, audio: bytes) -> None:
         pass
 
 # ── Endpoints ──
-ARK_IMAGE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+ARK_IMAGE_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
 TTS_HOST = "https://openspeech.bytedance.com"
 TTS_ENDPOINT = "/api/v3/tts/unidirectional"
 TTS_RESOURCE_ID = "seed-tts-2.0"
 ASR_ENDPOINT = "/v1/audio/transcription"
 
 # ── Default models ──
-DEFAULT_IMAGE_MODEL = "doubao-seedream-5-0-lite-260128"
+DEFAULT_IMAGE_MODEL = "doubao-seedream-5.0-lite"
+DEFAULT_IMAGE_SIZE = "2K"
 DEFAULT_TTS_MODEL = "volcengine-tts"  # semantic label for logging
 
 API_TIMEOUT_SECONDS = 120
@@ -122,11 +123,11 @@ class APIError(RuntimeError):
 
 
 def _get_ark_api_key() -> str:
-	"""Return the Volcengine Ark API key for image generation."""
-	key = getattr(settings, "ARK_API_KEY", "")
+	"""Return the Agent Plan API key for image generation."""
+	key = getattr(settings, "ARK_AGENT_PLAN_API_KEY", "") or getattr(settings, "ARK_API_KEY", "")
 	if not key:
 		raise ConfigurationError(
-			"ARK_API_KEY is not set. Set it in .env to use image generation."
+			"ARK_AGENT_PLAN_API_KEY is not set. Set it in .env to use Agent Plan image generation."
 		)
 	return key
 
@@ -143,38 +144,45 @@ def _extract_error(resp: requests.Response) -> str:
 		return resp.text[:500]
 
 
-def _format_image_size(width: int, height: int) -> str:
-	"""Map legacy 1328 defaults to Seedream 2K; otherwise use explicit pixels."""
+def _resolve_image_size(width: int, height: int, size: str | None = None) -> str:
+	"""Resolve Seedream size. Agent Plan supports 2K/3K/4K; default to 2K."""
+	if size:
+		return size
+	configured = getattr(settings, "ARK_IMAGE_SIZE", DEFAULT_IMAGE_SIZE) or DEFAULT_IMAGE_SIZE
 	if width == 1328 and height == 1328:
-		return "2K"
+		return configured
+	if width == height == 1024:
+		# Agent Plan does not advertise 1K; keep 2K as the supported minimum.
+		return configured
 	return f"{width}x{height}"
 
 
 # ═══════════════════════════════════════════════════════════════
-# Image Generation — Volcengine Ark Seedream 5.0 Lite
+# Image Generation — Volcengine Ark Agent Plan Seedream 5.0 Lite
 # ═══════════════════════════════════════════════════════════════
 
 
 def generate_image(
 	prompt: str,
 	*,
-	model: str = DEFAULT_IMAGE_MODEL,
+	model: str | None = None,
 	n: int = 1,
 	width: int = 1328,
 	height: int = 1328,
+	size: str | None = None,
 	seed: int = -1,
 	use_pre_llm: bool = True,
 	max_retries: int = IMAGE_MAX_RETRIES,
 	retry_base_delay: float = IMAGE_RETRY_BASE_DELAY,
 ) -> dict[str, Any]:
-	"""Generate images via Volcengine Ark Seedream 5.0 Lite.
+	"""Generate images via Volcengine Ark Agent Plan Seedream 5.0 Lite.
 
 	Args:
 		prompt: Image generation prompt (Chinese supported).
-		model: Ark model ID (default: doubao-seedream-5-0-lite-260128).
+		model: Agent Plan model ID (default: doubao-seedream-5.0-lite).
 		n: Number of images requested (API may return one per call).
-		width: Image width hint (1328 maps to 2K).
-		height: Image height hint (1328 maps to 2K).
+		width/height: Legacy size hints; Agent Plan default is 2K.
+		size: Explicit size string (2K/3K/4K preferred).
 		seed: Ignored (kept for backward compatibility).
 		use_pre_llm: Ignored (kept for backward compatibility).
 		max_retries: Max retries for transient errors.
@@ -184,7 +192,7 @@ def generate_image(
 		Dict with keys: "urls" (list[str]), "model", "usage".
 
 	Raises:
-		ConfigurationError: If ARK_API_KEY is not set.
+		ConfigurationError: If Agent Plan API key is not set.
 		APIError: If the API returns an error or all retries exhausted.
 	"""
 	del seed, use_pre_llm, n  # Ark API handles these differently; kept for callers.
@@ -195,12 +203,14 @@ def generate_image(
 	api_key = _get_ark_api_key()
 	base_url = getattr(settings, "ARK_IMAGE_BASE_URL", ARK_IMAGE_BASE_URL).rstrip("/")
 	url = f"{base_url}/images/generations"
-	size = _format_image_size(width, height)
+	resolved_model = model or getattr(settings, "ARK_IMAGE_MODEL", DEFAULT_IMAGE_MODEL) or DEFAULT_IMAGE_MODEL
+	resolved_size = _resolve_image_size(width, height, size)
 
 	body = {
-		"model": model,
+		"model": resolved_model,
 		"prompt": prompt,
-		"size": size,
+		"size": resolved_size,
+		"output_format": "png",
 		"response_format": "url",
 		"watermark": False,
 		"sequential_image_generation": "disabled",
@@ -211,9 +221,9 @@ def generate_image(
 	}
 
 	logger.info(
-		"Ark Seedream image generation: model=%s, size=%s, prompt=%.100s...",
-		model,
-		size,
+		"Ark Agent Plan image generation: model=%s, size=%s, prompt=%.100s...",
+		resolved_model,
+		resolved_size,
 		prompt,
 	)
 
@@ -301,14 +311,14 @@ def generate_image(
 		if not urls:
 			raise APIError("Ark image response did not include any image URLs")
 
-		logger.info("Ark Seedream image generation complete: urls=%d", len(urls))
+		logger.info("Ark Agent Plan image generation complete: urls=%d", len(urls))
 		return {
 			"urls": urls,
-			"model": model,
+			"model": resolved_model,
 			"usage": data.get("usage", {}),
 		}
 
-	raise last_error or APIError("Ark image generation failed")
+	raise last_error or APIError("Ark Agent Plan image generation failed")
 
 
 # ═══════════════════════════════════════════════════════════════

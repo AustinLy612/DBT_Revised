@@ -13,8 +13,10 @@ urlpatterns = [
     path("session/<str:session_id>/message/", views.send_message_view, name="send_message"),
     path("session/<str:session_id>/stream/", views.stream_message_view, name="stream_message"),
     path("message/<str:message_id>/image-status/", views.message_image_status_view, name="message_image_status"),
+    path("message/<str:message_id>/retry-image/", views.retry_message_image_view, name="retry_message_image"),
     path("session/<str:session_id>/generate-scene-image/", views.generate_scene_image_view, name="generate_scene_image"),
     path("session/<str:session_id>/scene-image-status/", views.scene_image_status_view, name="scene_image_status"),
+    path("session/<str:session_id>/retry-scene-image/", views.retry_scene_image_view, name="retry_scene_image"),
     path("session/<str:session_id>/end/", views.end_session_view, name="end_session"),
     path("session/<str:session_id>/terminate/", views.terminate_session_view, name="terminate"),
 ]

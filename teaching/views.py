@@ -285,7 +285,7 @@ def send_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
         return response
 
     # Auto-generate image if the AI provided an image_prompt.
-    # Run in background thread to avoid blocking the response (and gunicorn timeouts).
+    # Never let image dispatch failures break the text teaching response.
     image_prompt = response_data.get("image_prompt", "").strip()
     if image_prompt:
         ai_msg = (
@@ -293,7 +293,14 @@ def send_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
             .order_by("-created_at").first()
         )
         if ai_msg:
-            _start_image_generation(session, image_prompt, ai_msg.message_id)
+            try:
+                _start_image_generation(session, image_prompt, ai_msg.message_id)
+            except Exception:
+                logger.exception(
+                    "Teaching image dispatch failed for session %s message %s",
+                    session.session_id,
+                    ai_msg.message_id,
+                )
 
     # Auto-detect session completion: LLM sent a summary AND all plan
     # steps have been covered, so end the session automatically.
@@ -534,12 +541,20 @@ def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
                         role=ChatMessage.Role.ASSISTANT,
                         content=tc.get("content", ""),
                         image_prompt=tc.get("image_prompt", ""),
+                        teaching_step=current_step,
                     )
                     event["teaching_content"]["message_id"] = ai_msg.message_id
 
                     image_prompt = tc.get("image_prompt", "").strip()
                     if image_prompt:
-                        _start_image_generation(session, image_prompt, ai_msg.message_id)
+                        try:
+                            _start_image_generation(session, image_prompt, ai_msg.message_id)
+                        except Exception:
+                            logger.exception(
+                                "Streaming image dispatch failed for session %s message %s",
+                                session.session_id,
+                                ai_msg.message_id,
+                            )
 
                     # Update RAG context IDs
                     source_ids = tc.get("source_chunk_ids", [])
@@ -571,8 +586,20 @@ def _start_image_generation(session, image_prompt: str, message_id: str) -> None
     dispatch_teaching_image(session.session_id, image_prompt, message_id)
 
 
+def _image_failed_html(message: str, retry_url: str) -> HttpResponse:
+    return HttpResponse(
+        '<div class="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg text-center">'
+        f'<p class="text-xs text-red-600 mb-2">{message}</p>'
+        f'<button hx-post="{retry_url}" hx-swap="outerHTML" hx-target="closest div" '
+        'class="text-xs text-purple-600 hover:text-purple-800 underline">'
+        '重新生成配图</button></div>'
+    )
+
+
 @profile_required
 def message_image_status_view(request: HttpRequest, message_id: str) -> HttpResponse:
+    from media_app.concurrency import get_image_error, get_image_status
+
     message = get_object_or_404(ChatMessage, message_id=message_id, user=request.user)
     if message.image_url:
         return HttpResponse(
@@ -581,6 +608,30 @@ def message_image_status_view(request: HttpRequest, message_id: str) -> HttpResp
             'class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">'
             "</div>"
         )
+    status = get_image_status(message_id)
+    if status == "failed":
+        retry_url = reverse("teaching:retry_message_image", kwargs={"message_id": message_id})
+        return _image_failed_html(get_image_error(message_id) or "配图失败，请稍后重试", retry_url)
+    return _teaching_message_polling_html(message_id)
+
+
+@profile_required
+def retry_message_image_view(request: HttpRequest, message_id: str) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+    from media_app.concurrency import clear_image_status
+
+    message = get_object_or_404(ChatMessage, message_id=message_id, user=request.user)
+    if not message.image_prompt:
+        return _htmx_error("无法重试：缺少图片描述。")
+    clear_image_status(message_id)
+    message.image_url = ""
+    message.save(update_fields=["image_url"])
+    try:
+        _start_image_generation(message.session, message.image_prompt, message.message_id)
+    except Exception:
+        logger.exception("Retry teaching image failed for message %s", message_id)
+        return _htmx_error("配图重试失败，请稍后再试。")
     return _teaching_message_polling_html(message_id)
 
 
@@ -599,9 +650,11 @@ def generate_scene_image_view(request: HttpRequest, session_id: str) -> HttpResp
 
 @profile_required
 def scene_image_status_view(request: HttpRequest, session_id: str) -> HttpResponse:
+    from media_app.concurrency import get_image_error, get_image_status
+    from media_app.tasks import get_scene_image_url
+
     services.get_session_or_404(session_id, request.user)
     job_id = request.GET.get("job_id", "").strip()
-    from media_app.tasks import get_scene_image_url
     image_url = get_scene_image_url(session_id, job_id or None)
     if image_url:
         return HttpResponse(
@@ -612,6 +665,36 @@ def scene_image_status_view(request: HttpRequest, session_id: str) -> HttpRespon
             '<div class="p-3 bg-gray-50 border border-gray-200 rounded-lg text-center">'
             '<span class="text-xs text-gray-500">暂无配图任务</span></div>'
         )
+    resource_id = f"scene:{session_id}:{job_id}"
+    if get_image_status(resource_id) == "failed":
+        retry_url = (
+            reverse("teaching:retry_scene_image", kwargs={"session_id": session_id})
+            + f"?job_id={job_id}"
+        )
+        return _image_failed_html(
+            get_image_error(resource_id) or "配图失败，请稍后重试",
+            retry_url,
+        )
+    return _teaching_scene_polling_html(session_id, job_id)
+
+
+@profile_required
+def retry_scene_image_view(request: HttpRequest, session_id: str) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+    from media_app.concurrency import clear_image_status
+    from media_app.tasks import dispatch_scene_image, get_scene_prompt
+
+    services.get_session_or_404(session_id, request.user)
+    old_job_id = request.GET.get("job_id", "").strip() or request.POST.get("job_id", "").strip()
+    prompt = get_scene_prompt(session_id, old_job_id) if old_job_id else ""
+    if not prompt:
+        prompt = request.POST.get("prompt", "").strip()
+    if not prompt:
+        return _htmx_error("无法重试：缺少图片描述。")
+    if old_job_id:
+        clear_image_status(f"scene:{session_id}:{old_job_id}")
+    job_id = dispatch_scene_image(session_id, prompt)
     return _teaching_scene_polling_html(session_id, job_id)
 
 

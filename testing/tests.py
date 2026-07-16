@@ -1013,8 +1013,8 @@ class ImageTaskDispatchTests(TestCase):
             ]
             self.assertEqual(image_calls, [])
 
-    @patch("testing.tasks.generate_test_question_image_async.delay")
-    def test_test_view_dispatches_current_question_only(self, mock_delay):
+    @patch("testing.tasks.generate_test_question_image_async.apply_async")
+    def test_test_view_dispatches_current_question_only(self, mock_apply):
         user = create_student("ondemand")
         session = create_completed_session(user)
         test = Test.objects.create(session=session, user=user, status=Test.Status.ONGOING)
@@ -1028,7 +1028,9 @@ class ImageTaskDispatchTests(TestCase):
         )
         self.client.force_login(user)
         self.client.get(reverse("testing:test", args=[test.test_id]))
-        mock_delay.assert_called_once_with(q1.question_id)
+        mock_apply.assert_called_once()
+        self.assertEqual(mock_apply.call_args.kwargs.get("args"), [q1.question_id])
+        self.assertEqual(mock_apply.call_args.kwargs.get("queue"), "interactive-images")
 
     @patch("testing.tasks.generate_test_question_image_async.apply_async")
     def test_answer_prefetches_next_question_on_batch_queue(self, mock_apply):

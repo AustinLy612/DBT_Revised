@@ -52,8 +52,18 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
     session_id = request.POST.get("session_id", "").strip()
     test_question_id = request.POST.get("test_question_id", "").strip()
 
+    from media_app.concurrency import run_with_image_slot, try_acquire_image_slot
+
+    resource_id = test_question_id or session_id or f"manual:{request.user.id}"
+    if not try_acquire_image_slot("interactive"):
+        return _htmx_error("配图服务繁忙，请稍后再试。")
+
     try:
-        result = services.generate_image(prompt, model=model)
+        result = run_with_image_slot(
+            resource_id,
+            lambda: services.generate_image(prompt, model=model),
+            kind="interactive",
+        )
     except services.ConfigurationError as exc:
         logger.error("Image generation config error: %s", exc)
         return _htmx_error("图像生成服务未配置，请联系管理员。")

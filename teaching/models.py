@@ -73,6 +73,7 @@ class ChatMessage(models.Model):
     modality = models.CharField(max_length=20, default="text")
     image_prompt = models.CharField(max_length=500, default="", blank=True)
     image_url = models.URLField(max_length=1000, default="", blank=True)
+    teaching_step = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
