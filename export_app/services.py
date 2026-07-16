@@ -124,6 +124,33 @@ def aggregate_user_data(user):
     for r in risk_events:
         r["trigger_time"] = r["trigger_time"].isoformat() if r["trigger_time"] else None
 
+    from ema_log.models import EMASubmission
+
+    ema_submissions = list(
+        EMASubmission.objects.filter(user=user)
+        .order_by("-created_at")
+        .values(
+            "submission_id",
+            "sad_score",
+            "anxious_score",
+            "angry_score",
+            "calm_score",
+            "hopeful_score",
+            "distress_score",
+            "nssi_urge_score",
+            "suicide_urge_score",
+            "used_dbt_skill",
+            "dbt_skills_used",
+            "skill_effectiveness_score",
+            "medical_doctor_visit",
+            "medical_group_therapy",
+            "medical_medication_change",
+            "created_at",
+        )
+    )
+    for e in ema_submissions:
+        e["created_at"] = e["created_at"].isoformat() if e["created_at"] else None
+
     return {
         "user": {
             "id": user.id,
@@ -145,6 +172,7 @@ def aggregate_user_data(user):
         "mood_records": mood_records,
         "risk_events": risk_events,
         "achievements": achievements,
+        "ema_submissions": ema_submissions,
     }
 
 

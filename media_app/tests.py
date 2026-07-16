@@ -18,6 +18,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from . import services
+from . import concurrency
 from .models import AudioSynthesisLog, AudioTranscriptionLog, ImageGenerationLog
 
 User = get_user_model()
@@ -59,13 +60,13 @@ class ImageGenerationLogModelTests(TestCase):
         log = ImageGenerationLog.objects.create(
             user=user,
             prompt="一只可爱的猫",
-            model="jimeng_t2i_v31",
+            model="doubao-seedream-5-0-lite-260128",
             temporary_image_url="https://example.com/img.png",
             status=ImageGenerationLog.Status.SUCCESS,
             source="manual",
         )
         self.assertEqual(log.status, "success")
-        self.assertEqual(log.model, "jimeng_t2i_v31")
+        self.assertEqual(log.model, "doubao-seedream-5-0-lite-260128")
         self.assertIn("猫", log.prompt)
         self.assertIsNotNone(log.created_at)
 
@@ -173,105 +174,64 @@ class ImageGenerationServiceTests(TestCase):
         self.user = create_student()
 
     @staticmethod
-    def _apply_auth_patches():
-        """Start auth/sleep patches. Returns list of patches to stop."""
-        p1 = patch.object(services, "_parse_image_api_key", return_value=("ak", "sk", "token"))
-        p2 = patch.object(services, "_volcengine_sign_headers", return_value={"Authorization": "HMAC-SHA256 ...", "Content-Type": "application/json"})
-        p3 = patch("media_app.services.time.sleep", return_value=None)
-        p1.start()
-        p2.start()
-        p3.start()
-        return [p1, p2, p3]
+    def _apply_sleep_patch():
+        return patch("media_app.services.time.sleep", return_value=None)
 
+    @patch("media_app.services._get_ark_api_key", return_value="ark-test-key")
     @patch("media_app.services._get_session")
-    def test_generate_image_success(self, mock_session):
+    def test_generate_image_success(self, mock_session, _mock_key):
         mock_sess = Mock()
-        # Submit response
-        submit_resp = Mock()
-        submit_resp.status_code = 200
-        submit_resp.json.return_value = {
-            "code": 10000,
-            "data": {"task_id": "task-abc-123"},
-            "message": "Success",
+        resp = Mock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "data": [{"url": "https://cdn.example.com/generated.png"}],
+            "usage": {},
         }
-        # Poll response
-        poll_resp = Mock()
-        poll_resp.status_code = 200
-        poll_resp.json.return_value = {
-            "code": 10000,
-            "data": {
-                "image_urls": ["https://cdn.example.com/generated.png"],
-                "status": "done",
-            },
-            "message": "Success",
-        }
-        mock_sess.post.side_effect = [submit_resp, poll_resp]
+        mock_sess.post.return_value = resp
         mock_session.return_value = mock_sess
 
-        patches = self._apply_auth_patches()
-        try:
+        with self._apply_sleep_patch():
             result = services.generate_image("夕阳下的海滩")
-        finally:
-            for p in patches:
-                p.stop()
 
         self.assertEqual(len(result["urls"]), 1)
         self.assertIn("cdn.example.com", result["urls"][0])
-        self.assertEqual(result["model"], "jimeng_t2i_v31")
+        self.assertEqual(result["model"], "doubao-seedream-5-0-lite-260128")
 
+    @patch("media_app.services._get_ark_api_key", return_value="ark-test-key")
     @patch("media_app.services._get_session")
-    def test_generate_image_submit_error(self, mock_session):
+    def test_generate_image_submit_error(self, mock_session, _mock_key):
         mock_sess = Mock()
-        submit_resp = Mock()
-        submit_resp.status_code = 400
-        submit_resp.json.return_value = {
-            "code": 50412,
-            "message": "Text Risk Not Pass",
+        resp = Mock()
+        resp.status_code = 400
+        resp.json.return_value = {
+            "error": {"message": "Text Risk Not Pass"},
         }
-        mock_sess.post.return_value = submit_resp
+        mock_sess.post.return_value = resp
         mock_session.return_value = mock_sess
 
-        patches = self._apply_auth_patches()
-        try:
+        with self._apply_sleep_patch():
             with self.assertRaises(services.APIError):
                 services.generate_image("")
-        finally:
-            for p in patches:
-                p.stop()
 
+    @patch("media_app.services._get_ark_api_key", return_value="ark-test-key")
     @patch("media_app.services._get_session")
-    def test_generate_image_poll_timeout(self, mock_session):
+    def test_generate_image_request_timeout(self, mock_session, _mock_key):
         import requests as req
+
         mock_sess = Mock()
-        submit_resp = Mock()
-        submit_resp.status_code = 200
-        submit_resp.json.return_value = {
-            "code": 10000,
-            "data": {"task_id": "task-xyz"},
-            "message": "Success",
-        }
-
-        call_count = [0]
-
-        def _side_effect(*args, **kwargs):
-            if call_count[0] == 0:
-                call_count[0] += 1
-                return submit_resp
-            raise req.Timeout()
-
-        mock_sess.post.side_effect = _side_effect
+        mock_sess.post.side_effect = req.Timeout()
         mock_session.return_value = mock_sess
 
-        patches = self._apply_auth_patches()
-        try:
+        with self._apply_sleep_patch():
             with self.assertRaises(services.APIError):
                 services.generate_image("test prompt", max_retries=0, retry_base_delay=0.01)
-        finally:
-            for p in patches:
-                p.stop()
 
     def test_generate_image_missing_key(self):
-        with patch.object(services, "_parse_image_api_key", side_effect=services.ConfigurationError("no key")):
+        with patch.object(
+            services,
+            "_get_ark_api_key",
+            side_effect=services.ConfigurationError("no key"),
+        ):
             with self.assertRaises(services.ConfigurationError):
                 services.generate_image("test")
 
@@ -280,6 +240,17 @@ class TTSServiceTests(TestCase):
     def setUp(self):
         self.user = create_student()
         self.default_speaker = "zh_female_xueayi_saturn_bigtts"
+        self.mock_session = Mock()
+        self._key_patch = patch.object(
+            services, "_get_volcengine_api_key", return_value="test-api-key"
+        )
+        self._session_patch = patch.object(
+            services, "_get_session", return_value=self.mock_session
+        )
+        self._key_patch.start()
+        self._session_patch.start()
+        self.addCleanup(self._key_patch.stop)
+        self.addCleanup(self._session_patch.stop)
 
     @patch("media_app.services.requests.post")
     def test_synthesize_speech_success(self, mock_post):
@@ -293,7 +264,7 @@ class TTSServiceTests(TestCase):
             json.dumps({"code": 0, "data": fake_audio}),
             json.dumps({"code": 20000000, "message": "OK", "data": None}),
         ]
-        mock_post.return_value = mock_resp
+        self.mock_session.post.return_value = mock_resp
 
         result = services.synthesize_speech("你好世界")
         self.assertEqual(result["audio_bytes"], b"fake_mp3_audio")
@@ -311,7 +282,7 @@ class TTSServiceTests(TestCase):
             json.dumps({"code": 0, "data": fake_audio}),
             json.dumps({"code": 20000000, "message": "OK", "data": None}),
         ]
-        mock_post.return_value = mock_resp
+        self.mock_session.post.return_value = mock_resp
 
         result = services.synthesize_speech("test", voice="zh_female_vv_uranus_bigtts")
         self.assertEqual(result["voice"], "zh_female_vv_uranus_bigtts")
@@ -330,7 +301,7 @@ class TTSServiceTests(TestCase):
             json.dumps({"code": 0, "data": None, "sentence": {"text": "test"}}),
             json.dumps({"code": 20000000, "message": "OK", "data": None}),
         ]
-        mock_post.return_value = mock_resp
+        self.mock_session.post.return_value = mock_resp
 
         result = services.synthesize_speech("test")
         self.assertEqual(result["audio_bytes"], b"chunk1chunk2")
@@ -341,7 +312,7 @@ class TTSServiceTests(TestCase):
         mock_resp.status_code = 500
         mock_resp.text = "Internal Server Error"
         mock_resp.json.return_value = {}
-        mock_post.return_value = mock_resp
+        self.mock_session.post.return_value = mock_resp
 
         with self.assertRaises(services.APIError):
             services.synthesize_speech("test")
@@ -353,7 +324,7 @@ class TTSServiceTests(TestCase):
         mock_resp.iter_lines.return_value = [
             json.dumps({"code": 55000000, "message": "resource ID mismatched"}),
         ]
-        mock_post.return_value = mock_resp
+        self.mock_session.post.return_value = mock_resp
 
         with self.assertRaises(services.APIError) as ctx:
             services.synthesize_speech("!!!")
@@ -435,18 +406,18 @@ class ImageGenerationViewTests(TestCase):
     def test_success_returns_image_html(self, mock_gen):
         mock_gen.return_value = {
             "urls": ["https://cdn.example.com/img.png"],
-            "model": "jimeng_t2i_v31",
+            "model": "doubao-seedream-5-0-lite-260128",
             "usage": {},
         }
         resp = self.client.post(self.url, {
             "prompt": "美丽的风景画",
-            "model": "jimeng_t2i_v31",
+            "model": "doubao-seedream-5-0-lite-260128",
             "source": "teaching_scene",
         })
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode()
         self.assertIn("cdn.example.com", content)
-        self.assertIn("jimeng_t2i_v31", content)
+        self.assertIn("doubao-seedream-5-0-lite-260128", content)
         # Verify ImageGenerationLog created
         self.assertEqual(ImageGenerationLog.objects.count(), 1)
         log = ImageGenerationLog.objects.first()
@@ -466,7 +437,7 @@ class ImageGenerationViewTests(TestCase):
 
     @patch("media_app.views.services.generate_image")
     def test_no_url_returns_error(self, mock_gen):
-        mock_gen.return_value = {"urls": [], "model": "jimeng_t2i_v31", "usage": {}}
+        mock_gen.return_value = {"urls": [], "model": "doubao-seedream-5-0-lite-260128", "usage": {}}
         resp = self.client.post(self.url, {"prompt": "test"})
         self.assertIn("未返回图片", resp.content.decode())
 
@@ -871,86 +842,64 @@ class TestDatabaseIsolationTests(TestCase):
 
 
 class ImageGenerationRetryTests(TestCase):
-    """Tests for generate_image submit-phase retry logic on transient errors."""
+    """Tests for generate_image retry logic on transient errors."""
 
     def setUp(self):
         self.user = create_student()
-        self._auth_patches = [
-            patch.object(services, "_parse_image_api_key", return_value=("ak", "sk", "token")),
-            patch.object(services, "_volcengine_sign_headers", return_value={"Authorization": "HMAC-SHA256 ...", "Content-Type": "application/json"}),
+        self._patches = [
+            patch.object(services, "_get_ark_api_key", return_value="ark-test-key"),
             patch("media_app.services.time.sleep", return_value=None),
         ]
 
     @patch("media_app.services._get_session")
     def test_retries_on_429_then_succeeds(self, mock_session):
-        """429 rate-limit responses trigger retry with backoff, then succeed."""
         rate_limited = Mock()
         rate_limited.status_code = 429
         rate_limited.json.return_value = {"error": {"message": "rate limited"}}
 
-        # Successful submit
-        submit_ok = Mock()
-        submit_ok.status_code = 200
-        submit_ok.json.return_value = {
-            "code": 10000,
-            "data": {"task_id": "task-123"},
-            "message": "Success",
-        }
-
-        # Successful poll
-        poll_ok = Mock()
-        poll_ok.status_code = 200
-        poll_ok.json.return_value = {
-            "code": 10000,
-            "data": {
-                "image_urls": ["https://cdn.example.com/img.png"],
-                "status": "done",
-            },
-            "message": "Success",
+        success = Mock()
+        success.status_code = 200
+        success.json.return_value = {
+            "data": [{"url": "https://cdn.example.com/img.png"}],
+            "usage": {},
         }
 
         mock_sess = Mock()
-        mock_sess.post.side_effect = [rate_limited, rate_limited, submit_ok, poll_ok]
+        mock_sess.post.side_effect = [rate_limited, rate_limited, success]
         mock_session.return_value = mock_sess
 
-        for p in self._auth_patches:
+        for p in self._patches:
             p.start()
         try:
             result = services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
         finally:
-            for p in self._auth_patches:
+            for p in self._patches:
                 p.stop()
 
         self.assertEqual(len(result["urls"]), 1)
-        # 1st & 2nd calls: retry (429), 3rd: submit (200), 4th: poll
-        self.assertEqual(mock_sess.post.call_count, 4)
+        self.assertEqual(mock_sess.post.call_count, 3)
 
     @patch("media_app.services._get_session")
     def test_no_retry_on_400(self, mock_session):
-        """400 (client error) should NOT retry — it's a permanent error."""
         mock_sess = Mock()
-        submit_bad = Mock()
-        submit_bad.status_code = 400
-        submit_bad.json.return_value = {
-            "code": 50412,
-            "message": "Text Risk Not Pass",
-        }
-        mock_sess.post.return_value = submit_bad
+        bad = Mock()
+        bad.status_code = 400
+        bad.json.return_value = {"error": {"message": "Text Risk Not Pass"}}
+        mock_sess.post.return_value = bad
         mock_session.return_value = mock_sess
 
-        for p in self._auth_patches:
+        for p in self._patches:
             p.start()
         try:
             with self.assertRaises(services.APIError):
                 services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
         finally:
-            for p in self._auth_patches:
+            for p in self._patches:
                 p.stop()
         self.assertEqual(mock_sess.post.call_count, 1)
 
     @patch("media_app.services._get_session")
     def test_exhausts_retries_then_raises(self, mock_session):
-        """When all submit retries return transient errors, eventually raise APIError."""
         mock_sess = Mock()
         server_err = Mock()
         server_err.status_code = 503
@@ -958,58 +907,26 @@ class ImageGenerationRetryTests(TestCase):
         mock_sess.post.return_value = server_err
         mock_session.return_value = mock_sess
 
-        for p in self._auth_patches:
+        for p in self._patches:
             p.start()
         try:
             with self.assertRaises(services.APIError) as ctx:
                 services.generate_image("test prompt", max_retries=2, retry_base_delay=0.01)
             self.assertIn("503", str(ctx.exception))
         finally:
-            for p in self._auth_patches:
+            for p in self._patches:
                 p.stop()
-        self.assertEqual(mock_sess.post.call_count, 3)  # 1 initial + 2 retries
+        self.assertEqual(mock_sess.post.call_count, 3)
 
-    @patch("media_app.services._get_session")
-    def test_retries_on_business_error_code(self, mock_session):
-        """Business error codes 50429/50430 trigger retry on submit."""
-        rate_limited_resp = Mock()
-        rate_limited_resp.status_code = 200
-        rate_limited_resp.json.return_value = {
-            "code": 50429,
-            "message": "QPS超限",
-        }
 
-        # Successful submit on retry
-        submit_ok = Mock()
-        submit_ok.status_code = 200
-        submit_ok.json.return_value = {
-            "code": 10000,
-            "data": {"task_id": "task-456"},
-            "message": "Success",
-        }
-
-        poll_ok = Mock()
-        poll_ok.status_code = 200
-        poll_ok.json.return_value = {
-            "code": 10000,
-            "data": {
-                "image_urls": ["https://cdn.example.com/img2.png"],
-                "status": "done",
-            },
-            "message": "Success",
-        }
-
-        mock_sess = Mock()
-        mock_sess.post.side_effect = [rate_limited_resp, submit_ok, poll_ok]
-        mock_session.return_value = mock_sess
-
-        for p in self._auth_patches:
-            p.start()
-        try:
-            result = services.generate_image("test", max_retries=2, retry_base_delay=0.01)
-        finally:
-            for p in self._auth_patches:
-                p.stop()
-
-        self.assertEqual(len(result["urls"]), 1)
-        self.assertIn("cdn.example.com", result["urls"][0])
+class ImageConcurrencyGuardTests(TestCase):
+    @patch("media_app.concurrency._redis_client")
+    def test_slot_acquire_and_release(self, mock_redis_factory):
+        client = Mock()
+        client.incr.side_effect = [1, 3, 2]
+        client.decr.return_value = 1
+        mock_redis_factory.return_value = client
+        self.assertTrue(concurrency.try_acquire_image_slot())
+        self.assertFalse(concurrency.try_acquire_image_slot())
+        concurrency.release_image_slot()
+        self.assertTrue(concurrency.try_acquire_image_slot())

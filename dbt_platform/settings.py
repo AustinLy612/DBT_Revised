@@ -158,6 +158,26 @@ CELERY_TIMEZONE = "Asia/Shanghai"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60
 
+CELERY_TASK_ROUTES = {
+    "media_app.tasks.generate_image_async": {"queue": "interactive-images"},
+    "media_app.tasks.generate_scene_image_async": {"queue": "interactive-images"},
+    "testing.tasks.generate_test_question_image_async": {"queue": "interactive-images"},
+    "testing.tasks.generate_test_questions_async": {"queue": "questions"},
+    "knowledge_base.tasks.process_document_async": {"queue": "documents"},
+}
+
+CELERY_MONITOR_QUEUES = (
+    "celery",
+    "questions",
+    "documents",
+    "interactive-images",
+    "batch-images",
+    "images",
+)
+IMAGE_MAX_CONCURRENT = env.int("IMAGE_MAX_CONCURRENT", default=4)
+IMAGE_INTERACTIVE_MAX_CONCURRENT = env.int("IMAGE_INTERACTIVE_MAX_CONCURRENT", default=2)
+IMAGE_BATCH_MAX_CONCURRENT = env.int("IMAGE_BATCH_MAX_CONCURRENT", default=2)
+
 # ── MinIO ──
 MINIO_ENDPOINT = env("MINIO_ENDPOINT", default="localhost:9000")
 MINIO_ACCESS_KEY = env("MINIO_ACCESS_KEY", default="minioadmin")
@@ -183,8 +203,16 @@ MINIMAX_BASE_URL = env("MINIMAX_BASE_URL", default="https://api.minimaxi.com")
 # Obtain from https://console.volcengine.com → 语音技术 → API Key管理 (new console)
 VOLCENGINE_API_KEY = env("VOLCENGINE_API_KEY", default="")
 
-# Image generation via Volcengine Jimeng (即梦文生图3.1)
-# STS format: AccessKeyId.SecretAccessKey.SessionToken
+# Image generation via Volcengine Ark Seedream 5.0 Lite
+ARK_API_KEY = env("ARK_API_KEY", default="")
+ARK_IMAGE_BASE_URL = env(
+    "ARK_IMAGE_BASE_URL", default="https://ark.cn-beijing.volces.com/api/v3"
+)
+ARK_IMAGE_MODEL = env(
+    "ARK_IMAGE_MODEL", default="doubao-seedream-5-0-lite-260128"
+)
+
+# Deprecated: Jimeng Visual API (replaced by Ark Seedream)
 VOLCENGINE_IMAGE_API_KEY = env("VOLCENGINE_IMAGE_API_KEY", default="")
 
 # TTS V3 API uses X-Api-Key + X-Api-Resource-Id (no appid needed).

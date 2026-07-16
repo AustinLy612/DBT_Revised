@@ -22,6 +22,14 @@ build/
 
 # Docker
 docker/certs/
+docker/aliyun-credentials.ini
+
+# Local model / embedding cache (do not commit)
+/models/
+
+# Load-test artifacts
+scripts/loadtest_*_report.json
+scripts/loadtest_*_run*.log
 
 # Claude
 .claude/

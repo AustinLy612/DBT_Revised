@@ -13,7 +13,7 @@ from http import HTTPStatus
 from django.contrib import messages
 from django.http import StreamingHttpResponse
 from django.http import HttpRequest, HttpResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from . import services
@@ -288,7 +288,12 @@ def send_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
     # Run in background thread to avoid blocking the response (and gunicorn timeouts).
     image_prompt = response_data.get("image_prompt", "").strip()
     if image_prompt:
-        _start_image_generation(session, image_prompt)
+        ai_msg = (
+            ChatMessage.objects.filter(session=session, role=ChatMessage.Role.ASSISTANT)
+            .order_by("-created_at").first()
+        )
+        if ai_msg:
+            _start_image_generation(session, image_prompt, ai_msg.message_id)
 
     # Auto-detect session completion: LLM sent a summary AND all plan
     # steps have been covered, so end the session automatically.
@@ -532,6 +537,10 @@ def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
                     )
                     event["teaching_content"]["message_id"] = ai_msg.message_id
 
+                    image_prompt = tc.get("image_prompt", "").strip()
+                    if image_prompt:
+                        _start_image_generation(session, image_prompt, ai_msg.message_id)
+
                     # Update RAG context IDs
                     source_ids = tc.get("source_chunk_ids", [])
                     if source_ids:
@@ -557,8 +566,81 @@ def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
     return response
 
 
-def _start_image_generation(session, image_prompt: str) -> None:
-    """Dispatch image generation to Celery — never blocks the response."""
-    from media_app.tasks import generate_image_async
+def _start_image_generation(session, image_prompt: str, message_id: str) -> None:
+    from media_app.tasks import dispatch_teaching_image
+    dispatch_teaching_image(session.session_id, image_prompt, message_id)
 
-    generate_image_async.delay(session.session_id, image_prompt)
+
+@profile_required
+def message_image_status_view(request: HttpRequest, message_id: str) -> HttpResponse:
+    message = get_object_or_404(ChatMessage, message_id=message_id, user=request.user)
+    if message.image_url:
+        return HttpResponse(
+            '<div class="mt-2 flex justify-center">'
+            f'<img src="{message.image_url}" alt="教学配图" loading="lazy" '
+            'class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">'
+            "</div>"
+        )
+    return _teaching_message_polling_html(message_id)
+
+
+@profile_required
+def generate_scene_image_view(request: HttpRequest, session_id: str) -> HttpResponse:
+    if request.method != "POST":
+        return HttpResponse(status=HTTPStatus.METHOD_NOT_ALLOWED)
+    session = services.get_session_or_404(session_id, request.user)
+    prompt = request.POST.get("prompt", "").strip()
+    if not prompt:
+        prompt = f"DBT技能教学情景图：{session.selected_skill or '正念练习'}"
+    from media_app.tasks import dispatch_scene_image
+    job_id = dispatch_scene_image(session.session_id, prompt)
+    return _teaching_scene_polling_html(session.session_id, job_id)
+
+
+@profile_required
+def scene_image_status_view(request: HttpRequest, session_id: str) -> HttpResponse:
+    services.get_session_or_404(session_id, request.user)
+    job_id = request.GET.get("job_id", "").strip()
+    from media_app.tasks import get_scene_image_url
+    image_url = get_scene_image_url(session_id, job_id or None)
+    if image_url:
+        return HttpResponse(
+            f'<img src="{image_url}" alt="教学配图" class="w-full rounded-lg shadow" loading="lazy">'
+        )
+    if not job_id:
+        return HttpResponse(
+            '<div class="p-3 bg-gray-50 border border-gray-200 rounded-lg text-center">'
+            '<span class="text-xs text-gray-500">暂无配图任务</span></div>'
+        )
+    return _teaching_scene_polling_html(session_id, job_id)
+
+
+def _teaching_message_polling_html(message_id: str) -> HttpResponse:
+    from media_app.concurrency import get_image_status, wait_label_for_status
+    label = wait_label_for_status(get_image_status(message_id))
+    poll_url = reverse("teaching:message_image_status", kwargs={"message_id": message_id})
+    return HttpResponse(
+        '<div class="mt-2 p-3 bg-purple-50 border border-purple-200 rounded-lg text-center"'
+        f' hx-get="{poll_url}" hx-trigger="every 3s" hx-swap="outerHTML">'
+        '<div class="inline-block w-4 h-4 border-2 border-purple-200 '
+        'border-t-purple-500 rounded-full animate-spin"></div>'
+        f'<span class="text-xs text-purple-600 ml-2">{label}</span></div>'
+    )
+
+
+def _teaching_scene_polling_html(session_id: str, job_id: str) -> HttpResponse:
+    from media_app.concurrency import get_image_status, wait_label_for_status
+    label = wait_label_for_status(get_image_status(f"scene:{session_id}:{job_id}"))
+    poll_url = (
+        reverse("teaching:scene_image_status", kwargs={"session_id": session_id})
+        + f"?job_id={job_id}"
+    )
+    return HttpResponse(
+        '<div class="p-3 bg-purple-50 border border-purple-200 rounded-lg text-center"'
+        f' data-job-id="{job_id}"'
+        f' hx-get="{poll_url}" hx-trigger="every 3s" hx-swap="outerHTML">'
+        '<div class="inline-block w-4 h-4 border-2 border-purple-200 '
+        'border-t-purple-500 rounded-full animate-spin"></div>'
+        f'<span class="text-xs text-purple-600 ml-2">{label}</span></div>'
+    )
+

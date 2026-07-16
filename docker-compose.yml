@@ -26,7 +26,7 @@ services:
   # ── Celery worker ──
   worker:
     build: .
-    command: celery -A dbt_platform worker --loglevel=info --concurrency=2
+    command: celery -A dbt_platform worker --loglevel=info --concurrency=2 -Q celery,documents
     volumes:
       - .:/app
       - ./logs:/app/logs
@@ -38,6 +38,39 @@ services:
       - redis
       - minio
       - qdrant
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  worker-images:
+    image: dbt-worker:latest
+    build: .
+    command: celery -A dbt_platform worker --loglevel=info --concurrency=4 -Q interactive-images,batch-images,images
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+      - redis
+    restart: unless-stopped
+    networks:
+      - dbt_net
+
+  worker-questions:
+    image: dbt-worker:latest
+    build: .
+    command: celery -A dbt_platform worker --loglevel=info --concurrency=4 -Q questions
+    volumes:
+      - .:/app
+      - ./logs:/app/logs
+      - hf_cache:/root/.cache/huggingface
+    env_file:
+      - .env
+    depends_on:
+      - mongodb
+      - redis
     restart: unless-stopped
     networks:
       - dbt_net

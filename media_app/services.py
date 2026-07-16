@@ -1,4 +1,4 @@
-"""Media services — image generation (Volcengine Jimeng), TTS (Volcengine), and ASR (Volcengine).
+"""Media services — image generation (Volcengine Ark Seedream), TTS (Volcengine), and ASR (Volcengine).
 
 Image files and raw audio are NOT persisted. Only metadata is stored.
 """
@@ -6,14 +6,11 @@ Image files and raw audio are NOT persisted. Only metadata is stored.
 from __future__ import annotations
 
 import hashlib
-import hmac as _hmac
 import io
 import json
 import logging
 import threading
 import time
-import urllib.parse
-from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -96,26 +93,19 @@ def _tts_cache_set(text: str, voice: str, audio: bytes) -> None:
         pass
 
 # ── Endpoints ──
-VISUAL_API_HOST = "visual.volcengineapi.com"
-VISUAL_API_PATH = "/"
-IMAGE_REQ_KEY = "jimeng_t2i_v31"
-IMAGE_API_VERSION = "2022-08-31"
-IMAGE_REGION = "cn-north-1"
-IMAGE_SERVICE = "cv"
+ARK_IMAGE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 TTS_HOST = "https://openspeech.bytedance.com"
 TTS_ENDPOINT = "/api/v3/tts/unidirectional"
 TTS_RESOURCE_ID = "seed-tts-2.0"
 ASR_ENDPOINT = "/v1/audio/transcription"
 
 # ── Default models ──
-DEFAULT_IMAGE_MODEL = "jimeng_t2i_v31"
+DEFAULT_IMAGE_MODEL = "doubao-seedream-5-0-lite-260128"
 DEFAULT_TTS_MODEL = "volcengine-tts"  # semantic label for logging
 
 API_TIMEOUT_SECONDS = 120
 IMAGE_MAX_RETRIES = 3
 IMAGE_RETRY_BASE_DELAY = 2.0  # seconds, multiplied by 2^attempt
-IMAGE_POLL_MAX_ATTEMPTS = 60       # 60 × 2s = 120s max wait
-IMAGE_POLL_INTERVAL = 2.0          # seconds between polls
 
 
 class ConfigurationError(RuntimeError):
@@ -131,27 +121,14 @@ class APIError(RuntimeError):
 # ═══════════════════════════════════════════════════════════════
 
 
-def _parse_image_api_key() -> tuple[str, str, str]:
-	"""Parse VOLCENGINE_IMAGE_API_KEY into (access_key, secret_key, session_token).
-
-	Supports two formats:
-	  - Long-term key: AccessKeyId.SecretAccessKey  (2 parts, no session token)
-	  - STS key:        AccessKeyId.SecretAccessKey.SessionToken  (3 parts)
-	"""
-	key = getattr(settings, "VOLCENGINE_IMAGE_API_KEY", "")
+def _get_ark_api_key() -> str:
+	"""Return the Volcengine Ark API key for image generation."""
+	key = getattr(settings, "ARK_API_KEY", "")
 	if not key:
 		raise ConfigurationError(
-			"VOLCENGINE_IMAGE_API_KEY is not set. Set it in .env to use image generation."
+			"ARK_API_KEY is not set. Set it in .env to use image generation."
 		)
-	parts = key.split(".")
-	if len(parts) == 3:
-		return parts[0], parts[1], parts[2]
-	if len(parts) == 2:
-		return parts[0], parts[1], ""
-	raise ConfigurationError(
-		"VOLCENGINE_IMAGE_API_KEY format is invalid. "
-		"Expected AK.SK or AK.SK.Token (STS format)."
-	)
+	return key
 
 
 def _extract_error(resp: requests.Response) -> str:
@@ -166,121 +143,16 @@ def _extract_error(resp: requests.Response) -> str:
 		return resp.text[:500]
 
 
-# ═══════════════════════════════════════════════════════════════
-# Volcengine Signature V4
-# ═══════════════════════════════════════════════════════════════
-
-
-def _sign(key: bytes, msg: str) -> bytes:
-	return _hmac.new(key, msg.encode("utf-8"), "sha256").digest()
-
-
-def _sha256_hex(data: str | bytes) -> str:
-	return hashlib.sha256(
-		data.encode("utf-8") if isinstance(data, str) else data
-	).hexdigest()
-
-
-def _volcengine_sign_headers(
-	method: str,
-	host: str,
-	path: str,
-	query: dict[str, str],
-	body: str,
-	access_key: str,
-	secret_key: str,
-	session_token: str,
-) -> dict[str, str]:
-	"""Build Volcengine Signature V4 request headers."""
-	now = datetime.now(timezone.utc)
-	timestamp = now.strftime("%Y%m%dT%H%M%SZ")
-	datestamp = now.strftime("%Y%m%d")
-
-	# Canonical query string (sorted, encoded)
-	canonical_query = "&".join(
-		f"{urllib.parse.quote(k, safe='')}={urllib.parse.quote(v, safe='')}"
-		for k, v in sorted(query.items())
-	)
-
-	# Payload hash
-	payload_hash = _sha256_hex(body)
-
-	# Headers to sign (must include host and x-date at minimum)
-	headers_to_sign = {
-		"host": host,
-		"x-date": timestamp,
-		"x-content-sha256": payload_hash,
-	}
-	if session_token:
-		headers_to_sign["x-security-token"] = session_token
-
-	# Canonical headers (sorted by key, lowercased, trimmed)
-	canonical_headers = "".join(
-		f"{k}:{v}\n" for k, v in sorted(headers_to_sign.items())
-	)
-	signed_headers = ";".join(sorted(headers_to_sign.keys()))
-
-	# Canonical request
-	canonical_request = (
-		f"{method}\n"
-		f"{path}\n"
-		f"{canonical_query}\n"
-		f"{canonical_headers}\n"
-		f"{signed_headers}\n"
-		f"{payload_hash}"
-	)
-
-	# Credential scope
-	credential_scope = f"{datestamp}/{IMAGE_REGION}/{IMAGE_SERVICE}/request"
-
-	# String to sign
-	string_to_sign = (
-		f"HMAC-SHA256\n"
-		f"{timestamp}\n"
-		f"{credential_scope}\n"
-		f"{_sha256_hex(canonical_request)}"
-	)
-
-	# Signing key — Volcengine uses the Secret Access Key directly as kSecret
-	# (NOT prefixed like AWS's "AWS4"+sk). See:
-	# https://www.volcengine.com/docs/6369/67270
-	k_date = _sign(secret_key.encode("utf-8"), datestamp)
-	k_region = _sign(k_date, IMAGE_REGION)
-	k_service = _sign(k_region, IMAGE_SERVICE)
-	k_signing = _sign(k_service, "request")
-
-	# Signature
-	signature = _hmac.new(
-		k_signing, string_to_sign.encode("utf-8"), "sha256"
-	).hexdigest()
-
-	# Authorization header
-	authorization = (
-		f"HMAC-SHA256 "
-		f"Credential={access_key}/{credential_scope}, "
-		f"SignedHeaders={signed_headers}, "
-		f"Signature={signature}"
-	)
-
-	result = {
-		"Host": host,
-		"X-Date": timestamp,
-		"X-Content-Sha256": payload_hash,
-		"Authorization": authorization,
-		"Content-Type": "application/json",
-	}
-	if session_token:
-		result["X-Security-Token"] = session_token
-
-	return result
+def _format_image_size(width: int, height: int) -> str:
+	"""Map legacy 1328 defaults to Seedream 2K; otherwise use explicit pixels."""
+	if width == 1328 and height == 1328:
+		return "2K"
+	return f"{width}x{height}"
 
 
 # ═══════════════════════════════════════════════════════════════
-# Image Generation — Volcengine Jimeng (即梦文生图3.1)
+# Image Generation — Volcengine Ark Seedream 5.0 Lite
 # ═══════════════════════════════════════════════════════════════
-#
-# The Jimeng API is asynchronous: submit task → poll for result.
-# Auth uses Volcengine Signature V4 (HMAC-SHA256) with STS credentials.
 
 
 def generate_image(
@@ -295,16 +167,16 @@ def generate_image(
 	max_retries: int = IMAGE_MAX_RETRIES,
 	retry_base_delay: float = IMAGE_RETRY_BASE_DELAY,
 ) -> dict[str, Any]:
-	"""Generate images via Volcengine Jimeng (即梦文生图3.1).
+	"""Generate images via Volcengine Ark Seedream 5.0 Lite.
 
 	Args:
-		prompt: Image generation prompt (Chinese supported, max 800 chars).
-		model: Semantic label (always jimeng_t2i_v31).
-		n: Number of images (currently API returns 1 per task).
-		width: Image width in pixels. Supported aspect ratios 1:3 to 3:1.
-		height: Image height in pixels. Width×height within [512×512, 2048×2048].
-		seed: Random seed (-1 for random).
-		use_pre_llm: Whether to use LLM to expand the prompt.
+		prompt: Image generation prompt (Chinese supported).
+		model: Ark model ID (default: doubao-seedream-5-0-lite-260128).
+		n: Number of images requested (API may return one per call).
+		width: Image width hint (1328 maps to 2K).
+		height: Image height hint (1328 maps to 2K).
+		seed: Ignored (kept for backward compatibility).
+		use_pre_llm: Ignored (kept for backward compatibility).
 		max_retries: Max retries for transient errors.
 		retry_base_delay: Base delay for exponential backoff.
 
@@ -312,194 +184,131 @@ def generate_image(
 		Dict with keys: "urls" (list[str]), "model", "usage".
 
 	Raises:
-		ConfigurationError: If VOLCENGINE_IMAGE_API_KEY is not set.
+		ConfigurationError: If ARK_API_KEY is not set.
 		APIError: If the API returns an error or all retries exhausted.
 	"""
+	del seed, use_pre_llm, n  # Ark API handles these differently; kept for callers.
+
 	if len(prompt) > 800:
 		prompt = prompt[:800]
 
-	access_key, secret_key, session_token = _parse_image_api_key()
-	host = VISUAL_API_HOST
-	path = VISUAL_API_PATH
+	api_key = _get_ark_api_key()
+	base_url = getattr(settings, "ARK_IMAGE_BASE_URL", ARK_IMAGE_BASE_URL).rstrip("/")
+	url = f"{base_url}/images/generations"
+	size = _format_image_size(width, height)
 
-	# ── Step 1: Submit the task ──
-	submit_query = {
-		"Action": "CVSync2AsyncSubmitTask",
-		"Version": IMAGE_API_VERSION,
-	}
-	submit_body = json.dumps({
-		"req_key": "jimeng_t2i_v31",
+	body = {
+		"model": model,
 		"prompt": prompt,
-		"seed": seed,
-		"width": width,
-		"height": height,
-		"use_pre_llm": use_pre_llm,
-	}, ensure_ascii=False)
+		"size": size,
+		"response_format": "url",
+		"watermark": False,
+		"sequential_image_generation": "disabled",
+	}
+	headers = {
+		"Authorization": f"Bearer {api_key}",
+		"Content-Type": "application/json",
+	}
 
-	logger.info("Jimeng image generation submit: prompt=%.100s..., size=%dx%d",
-	           prompt, width, height)
+	logger.info(
+		"Ark Seedream image generation: model=%s, size=%s, prompt=%.100s...",
+		model,
+		size,
+		prompt,
+	)
 
-	_task_id: str | None = None
 	last_error: Exception | None = None
 	_retry_statuses = {429, 502, 503, 529}
 
 	for attempt in range(max_retries + 1):
 		try:
-			headers = _volcengine_sign_headers(
-				"POST", host, path, submit_query, submit_body,
-				access_key, secret_key, session_token,
+			resp = _get_session().post(
+				url,
+				json=body,
+				headers=headers,
+				timeout=API_TIMEOUT_SECONDS,
 			)
-			url = f"https://{host}{path}?{urllib.parse.urlencode(submit_query)}"
-			resp = _get_session().post(url, data=submit_body.encode("utf-8"),
-			                           headers=headers, timeout=API_TIMEOUT_SECONDS)
 		except requests.Timeout:
-			last_error = APIError(f"Jimeng submit timed out after {API_TIMEOUT_SECONDS}s")
+			last_error = APIError(f"Ark image generation timed out after {API_TIMEOUT_SECONDS}s")
 			if attempt < max_retries:
 				delay = retry_base_delay * (2 ** attempt)
-				logger.warning("Jimeng submit timeout, retrying in %.1fs (attempt %d/%d)",
-				               delay, attempt + 1, max_retries)
+				logger.warning(
+					"Ark image timeout, retrying in %.1fs (attempt %d/%d)",
+					delay,
+					attempt + 1,
+					max_retries,
+				)
 				time.sleep(delay)
 				continue
 			raise last_error
 		except requests.ConnectionError as exc:
-			last_error = APIError(f"Jimeng submit connection failed: {exc}")
+			last_error = APIError(f"Ark image connection failed: {exc}")
 			last_error.__cause__ = exc
 			if attempt < max_retries:
 				delay = retry_base_delay * (2 ** attempt)
-				logger.warning("Jimeng submit connection error, retrying in %.1fs (attempt %d/%d)",
-				               delay, attempt + 1, max_retries)
+				logger.warning(
+					"Ark image connection error, retrying in %.1fs (attempt %d/%d)",
+					delay,
+					attempt + 1,
+					max_retries,
+				)
 				time.sleep(delay)
 				continue
 			raise last_error
 		except requests.RequestException as exc:
-			last_error = APIError(f"Jimeng submit request failed: {exc}")
+			last_error = APIError(f"Ark image request failed: {exc}")
 			last_error.__cause__ = exc
 			if attempt < max_retries:
 				delay = retry_base_delay * (2 ** attempt)
-				logger.warning("Jimeng submit request error, retrying in %.1fs (attempt %d/%d)",
-				               delay, attempt + 1, max_retries)
+				logger.warning(
+					"Ark image request error, retrying in %.1fs (attempt %d/%d)",
+					delay,
+					attempt + 1,
+					max_retries,
+				)
 				time.sleep(delay)
 				continue
 			raise last_error
 
 		if resp.status_code in _retry_statuses:
-			last_error = APIError(f"Jimeng submit returned {resp.status_code}: {_extract_error(resp)}")
+			last_error = APIError(
+				f"Ark image returned {resp.status_code}: {_extract_error(resp)}"
+			)
 			if attempt < max_retries:
 				delay = retry_base_delay * (2 ** attempt)
-				logger.warning("Jimeng submit transient error %s, retrying in %.1fs (attempt %d/%d)",
-				               resp.status_code, delay, attempt + 1, max_retries)
+				logger.warning(
+					"Ark image transient error %s, retrying in %.1fs (attempt %d/%d)",
+					resp.status_code,
+					delay,
+					attempt + 1,
+					max_retries,
+				)
 				time.sleep(delay)
 				continue
 			raise last_error
 
 		if resp.status_code != 200:
 			raise APIError(
-				f"Jimeng submit returned {resp.status_code}: {_extract_error(resp)}"
+				f"Ark image returned {resp.status_code}: {_extract_error(resp)}"
 			)
 
 		data = resp.json()
-		code = data.get("code", -1)
-		if code != 10000:
-			msg = data.get("message", "unknown error")
-			logger.error("Jimeng submit error: code=%s, message=%s", code, msg)
+		urls = [
+			item["url"]
+			for item in data.get("data", [])
+			if isinstance(item, dict) and item.get("url")
+		]
+		if not urls:
+			raise APIError("Ark image response did not include any image URLs")
 
-			# Retryable errors: 50429 (QPS limit), 50430 (concurrent limit),
-			# 50511 (post-img risk — retry may pass), 50519 (copyright retry)
-			_retryable_codes = {50429, 50430, 50511, 50519}
-			if code in _retryable_codes and attempt < max_retries:
-				delay = retry_base_delay * (2 ** attempt)
-				logger.warning("Jimeng submit retryable error %s, retrying in %.1fs (attempt %d/%d)",
-				               code, delay, attempt + 1, max_retries)
-				time.sleep(delay)
-				continue
-			raise APIError(f"Jimeng submit error {code}: {msg}")
+		logger.info("Ark Seedream image generation complete: urls=%d", len(urls))
+		return {
+			"urls": urls,
+			"model": model,
+			"usage": data.get("usage", {}),
+		}
 
-		_task_id = data.get("data", {}).get("task_id", "")
-		if _task_id:
-			break
-
-	if not _task_id:
-		raise last_error or APIError("Jimeng submit did not return a task_id")
-
-	logger.info("Jimeng task submitted: task_id=%s", _task_id)
-
-	# ── Step 2: Poll for result ──
-	poll_query = {
-		"Action": "CVSync2AsyncGetResult",
-		"Version": IMAGE_API_VERSION,
-	}
-	req_json_str = json.dumps({"return_url": True}, ensure_ascii=False)
-
-	# Re-derive credentials for the poll (signature is time-sensitive)
-	for poll_attempt in range(IMAGE_POLL_MAX_ATTEMPTS):
-		time.sleep(IMAGE_POLL_INTERVAL)
-
-		poll_body = json.dumps({
-			"req_key": "jimeng_t2i_v31",
-			"task_id": _task_id,
-			"req_json": req_json_str,
-		}, ensure_ascii=False)
-
-		try:
-			# Re-sign for each poll (timestamp changes)
-			headers = _volcengine_sign_headers(
-				"POST", host, path, poll_query, poll_body,
-				access_key, secret_key, session_token,
-			)
-			url = f"https://{host}{path}?{urllib.parse.urlencode(poll_query)}"
-			resp = _get_session().post(url, data=poll_body.encode("utf-8"),
-			                           headers=headers, timeout=API_TIMEOUT_SECONDS)
-		except requests.Timeout:
-			logger.warning("Jimeng poll timeout (attempt %d/%d)",
-			               poll_attempt + 1, IMAGE_POLL_MAX_ATTEMPTS)
-			continue
-		except requests.ConnectionError:
-			logger.warning("Jimeng poll connection error (attempt %d/%d)",
-			               poll_attempt + 1, IMAGE_POLL_MAX_ATTEMPTS)
-			continue
-		except requests.RequestException as exc:
-			logger.warning("Jimeng poll request error (attempt %d/%d): %s",
-			               poll_attempt + 1, IMAGE_POLL_MAX_ATTEMPTS, exc)
-			continue
-
-		if resp.status_code != 200:
-			logger.warning("Jimeng poll returned %s (attempt %d/%d)",
-			               resp.status_code, poll_attempt + 1, IMAGE_POLL_MAX_ATTEMPTS)
-			continue
-
-		data = resp.json()
-		code = data.get("code", -1)
-		if code != 10000:
-			msg = data.get("message", "unknown error")
-			logger.error("Jimeng poll error: code=%s, message=%s", code, msg)
-			raise APIError(f"Jimeng poll error {code}: {msg}")
-
-		status = data.get("data", {}).get("status", "")
-		if status == "done":
-			image_urls = data.get("data", {}).get("image_urls", []) or []
-			logger.info("Jimeng image generation complete: task_id=%s, urls=%d",
-			            _task_id, len(image_urls))
-			return {
-				"urls": image_urls,
-				"model": model,
-				"usage": {"task_id": _task_id},
-			}
-
-		if status in ("in_queue", "generating"):
-			logger.debug("Jimeng task %s status=%s (poll %d/%d)",
-			             _task_id, status, poll_attempt + 1, IMAGE_POLL_MAX_ATTEMPTS)
-			continue
-
-		if status == "not_found":
-			raise APIError(f"Jimeng task {_task_id} not found (may have expired)")
-		if status == "expired":
-			raise APIError(f"Jimeng task {_task_id} expired, please retry")
-
-		logger.warning("Jimeng unknown task status: %s", status)
-
-	raise APIError(
-		f"Jimeng task {_task_id} did not complete within {IMAGE_POLL_MAX_ATTEMPTS * IMAGE_POLL_INTERVAL:.0f}s"
-	)
+	raise last_error or APIError("Ark image generation failed")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -808,7 +617,7 @@ ASR_POLL_INTERVAL = 0.2  # seconds
 def _get_volcengine_api_key() -> str:
 	"""Return volcengine API key (shared by ASR and TTS) or raise ConfigurationError."""
 	key = getattr(settings, "VOLCENGINE_API_KEY", "")
-	if not key:
+	if not key or key == "change-me":
 		raise ConfigurationError(
 			"Volcengine services not configured. Set VOLCENGINE_API_KEY in .env"
 		)

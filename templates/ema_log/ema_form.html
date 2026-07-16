@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}DBT日志 - DBT 技能教学平台{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto mt-6" x-data="{
+    usedDbtSkill: {% if form.used_dbt_skill.value|default:'' == 'True' %}true{% else %}false{% endif %},
+    sad: {{ form.sad_score.value|default:5 }},
+    anxious: {{ form.anxious_score.value|default:5 }},
+    angry: {{ form.angry_score.value|default:5 }},
+    calm: {{ form.calm_score.value|default:5 }},
+    hopeful: {{ form.hopeful_score.value|default:5 }},
+    distress: {{ form.distress_score.value|default:5 }},
+    nssi: {{ form.nssi_urge_score.value|default:5 }},
+    suicide: {{ form.suicide_urge_score.value|default:5 }},
+    effectiveness: {{ form.skill_effectiveness_score.value|default:5 }},
+}">
+
+    <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-bold text-gray-800">DBT日志</h1>
+        <span class="text-sm bg-blue-100 text-blue-700 px-3 py-1.5 rounded-full">
+            今日第 <strong>{{ display_count }}</strong> 次填写
+        </span>
+    </div>
+
+    {% if messages %}
+    <div class="mb-4">
+        {% for msg in messages %}
+        <div class="p-3 rounded text-sm {% if msg.tags == 'error' %}bg-red-50 text-red-700{% else %}bg-green-50 text-green-700{% endif %}">
+            {{ msg }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <form method="post" class="space-y-8">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+        <div class="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-sm">
+            {{ form.non_field_errors }}
+        </div>
+        {% endif %}
+
+        <!-- Section 1: 实时情绪状态 -->
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-base font-semibold text-gray-800 mb-1">1. 实时情绪状态</h2>
+            <p class="text-xs text-gray-400 mb-4">请评估你此刻的情绪状态（1 = 完全没有，10 = 极度强烈）</p>
+
+            <div class="space-y-4">
+                {% include "ema_log/_slider.html" with field=form.sad_score label="悲伤 (Sad)" model="sad" %}
+                {% include "ema_log/_slider.html" with field=form.anxious_score label="焦虑 (Anxious)" model="anxious" %}
+                {% include "ema_log/_slider.html" with field=form.angry_score label="愤怒 (Angry)" model="angry" %}
+                {% include "ema_log/_slider.html" with field=form.calm_score label="平静 (Calm)" model="calm" %}
+                {% include "ema_log/_slider.html" with field=form.hopeful_score label="希望感 (Hopeful)" model="hopeful" %}
+            </div>
+        </div>
+
+        <!-- Section 2: 主观痛苦水平 -->
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-base font-semibold text-gray-800 mb-1">2. 主观痛苦水平</h2>
+            <p class="text-xs text-gray-400 mb-4">此刻你的痛苦程度有多高？（1 = 没有痛苦，10 = 极度痛苦）</p>
+            {% include "ema_log/_slider.html" with field=form.distress_score label="痛苦程度" model="distress" %}
+        </div>
+
+        <!-- Section 3: 自伤冲动 -->
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-base font-semibold text-gray-800 mb-1">3. 自伤冲动 (NSSI Urge)</h2>
+            <p class="text-xs text-gray-400 mb-4">此刻你有多强烈的伤害自己的冲动？（1 = 完全没有，10 = 极度强烈）</p>
+            {% include "ema_log/_slider.html" with field=form.nssi_urge_score label="自伤冲动" model="nssi" %}
+        </div>
+
+        <!-- Section 4: 自杀冲动 -->
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-base font-semibold text-gray-800 mb-1">4. 自杀冲动 (Suicide Urge)</h2>
+            <p class="text-xs text-gray-400 mb-4">此刻你有多强烈的自杀冲动？（1 = 完全没有，10 = 极度强烈）</p>
+            {% include "ema_log/_slider.html" with field=form.suicide_urge_score label="自杀冲动" model="suicide" %}
+        </div>
+
+        <!-- Section 5: DBT技能使用 -->
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-base font-semibold text-gray-800 mb-1">5. DBT技能使用</h2>
+            <p class="text-xs text-gray-400 mb-4">自上次测量以来，你是否使用过DBT技能？</p>
+
+            <fieldset>
+                {% if form.used_dbt_skill.errors %}
+                <p class="text-red-500 text-xs mb-2">{{ form.used_dbt_skill.errors.0 }}</p>
+                {% endif %}
+                <div class="flex gap-6">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="used_dbt_skill" value="True"
+                               x-model="usedDbtSkill" class="dbt-skill-radio">
+                        <span class="text-sm text-gray-700">是</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="used_dbt_skill" value="False"
+                               x-model="usedDbtSkill" class="dbt-skill-radio">
+                        <span class="text-sm text-gray-700">否</span>
+                    </label>
+                </div>
+            </fieldset>
+
+            <!-- Conditional: DBT skills sub-section -->
+            <div x-show="usedDbtSkill" x-transition class="mt-4 pl-4 border-l-2 border-blue-200 space-y-4">
+                <fieldset>
+                    <legend class="text-sm font-medium text-gray-700 mb-2">使用过哪些DBT技能？</legend>
+                    {% if form.dbt_skills_used.errors %}
+                    <p class="text-red-500 text-xs mb-2">{{ form.dbt_skills_used.errors.0 }}</p>
+                    {% endif %}
+                    <div class="grid grid-cols-2 gap-2">
+                        {% for checkbox in form.dbt_skills_used %}
+                        <label class="flex items-center gap-2 cursor-pointer text-sm text-gray-700 py-1">
+                            {{ checkbox.tag }} {{ checkbox.choice_label }}
+                        </label>
+                        {% endfor %}
+                    </div>
+                </fieldset>
+
+                <div>
+                    <label class="text-sm font-medium text-gray-700 mb-1 block">
+                        此次技能使用对你的帮助程度？（1 = 毫无帮助，10 = 极大帮助）
+                    </label>
+                    {% if form.skill_effectiveness_score.errors %}
+                    <p class="text-red-500 text-xs mb-1">{{ form.skill_effectiveness_score.errors.0 }}</p>
+                    {% endif %}
+                    <div class="flex items-center gap-4">
+                        <input type="range" name="skill_effectiveness_score" min="1" max="10"
+                               x-model="effectiveness" class="flex-1">
+                        <span class="text-sm font-medium text-blue-600 w-6 text-right" x-text="effectiveness"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 6: 医疗接触记录 -->
+        <div class="bg-white border rounded-lg p-6">
+            <h2 class="text-base font-semibold text-gray-800 mb-1">6. 医疗接触记录</h2>
+            <p class="text-xs text-gray-400 mb-4">自上次测量以来，你是否经历过以下情况？</p>
+
+            <div class="space-y-3">
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="medical_doctor_visit"
+                           {% if form.medical_doctor_visit.value %}checked{% endif %}
+                           class="w-4 h-4 text-blue-600 border-gray-300 rounded">
+                    <span class="text-sm text-gray-700">医生访谈</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="medical_group_therapy"
+                           {% if form.medical_group_therapy.value %}checked{% endif %}
+                           class="w-4 h-4 text-blue-600 border-gray-300 rounded">
+                    <span class="text-sm text-gray-700">团体治疗</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox" name="medical_medication_change"
+                           {% if form.medical_medication_change.value %}checked{% endif %}
+                           class="w-4 h-4 text-blue-600 border-gray-300 rounded">
+                    <span class="text-sm text-gray-700">药物调整</span>
+                </label>
+            </div>
+        </div>
+
+        <button type="submit"
+                class="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition">
+            提交日志
+        </button>
+    </form>
+</div>
+{% endblock %}
+{% block extra_scripts %}
+<script>
+    // Sync Alpine model with radio on load
+    const formEl = document.querySelector('[x-data]');
+    if (formEl) {
+        const data = formEl.__x.$data;
+        document.querySelectorAll('.dbt-skill-radio').forEach(r => {
+            if (r.checked) data.usedDbtSkill = r.value === 'True';
+            r.addEventListener('change', () => {
+                data.usedDbtSkill = r.value === 'True';
+            });
+        });
+    }
+</script>
+{% endblock %}

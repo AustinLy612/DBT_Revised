@@ -990,12 +990,11 @@ class FlowIntegrationTests(TestCase):
 
 
 class ImageTaskDispatchTests(TestCase):
-    """Tests for staggered image generation task dispatch."""
+    """Tests for on-demand image generation dispatch (no bulk enqueue)."""
 
-    def test_image_tasks_dispatched_with_staggered_countdown(self):
-        """Questions with image_prompt get staggered countdowns (0, 3, 6...)."""
+    def test_question_generation_does_not_bulk_dispatch_images(self):
         from .tasks import generate_test_questions_async
-        from .models import Test as TestModel, TestQuestion
+        from .models import Test as TestModel
 
         user = create_student("imgtester")
         session = create_completed_session(user)
@@ -1003,37 +1002,55 @@ class ImageTaskDispatchTests(TestCase):
             session=session, user=user, status=TestModel.Status.ONGOING,
         )
 
-        # Create 3 questions with image_prompt, 2 without
-        for idx, has_prompt in enumerate([True, False, True, True, False]):
-            TestQuestion.objects.create(
-                test=test,
-                question_text=f"Q{idx + 1}",
-                options=["A", "B", "C", "D"],
-                correct_option="0",
-                image_prompt=f"prompt {idx}" if has_prompt else "",
-            )
-
         with patch.object(generate_test_questions_async.app, "send_task") as mock_send:
-            from .tasks import generate_test_question_image_async
+            with patch("testing.services.generate_and_save_questions") as mock_gen:
+                mock_gen.return_value = []
+                generate_test_questions_async.run(test.test_id)
 
-            # Simulate what happens inside generate_test_questions_async
-            # after generate_and_save_questions returns
-            saved = list(TestQuestion.objects.filter(test=test).order_by("created_at"))
-            for i, q in enumerate(saved):
-                if q.image_prompt:
-                    generate_test_question_image_async.apply_async(
-                        args=[q.question_id],
-                        countdown=i * 3,
-                    )
+            image_calls = [
+                c for c in mock_send.call_args_list
+                if c[0] and "generate_test_question_image" in str(c[0][0])
+            ]
+            self.assertEqual(image_calls, [])
 
-            self.assertEqual(mock_send.call_count, 3)
-            calls = mock_send.call_args_list
+    @patch("testing.tasks.generate_test_question_image_async.delay")
+    def test_test_view_dispatches_current_question_only(self, mock_delay):
+        user = create_student("ondemand")
+        session = create_completed_session(user)
+        test = Test.objects.create(session=session, user=user, status=Test.Status.ONGOING)
+        q1 = TestQuestion.objects.create(
+            test=test, question_text="Q1", options=["A", "B"], correct_option="0",
+            image_prompt="prompt 1",
+        )
+        TestQuestion.objects.create(
+            test=test, question_text="Q2", options=["A", "B"], correct_option="0",
+            image_prompt="prompt 2",
+        )
+        self.client.force_login(user)
+        self.client.get(reverse("testing:test", args=[test.test_id]))
+        mock_delay.assert_called_once_with(q1.question_id)
 
-            # Extract countdown values from each call
-            countdowns = []
-            for call in calls:
-                kwargs = call[1]
-                countdowns.append(kwargs.get("countdown", -1))
-
-            # Question indices with prompts: 0, 2, 3 → countdowns: 0, 6, 9
-            self.assertEqual(countdowns, [0, 6, 9])
+    @patch("testing.tasks.generate_test_question_image_async.apply_async")
+    def test_answer_prefetches_next_question_on_batch_queue(self, mock_apply):
+        user = create_student("prefetch")
+        session = create_completed_session(user)
+        test = Test.objects.create(session=session, user=user, status=Test.Status.ONGOING)
+        q1 = TestQuestion.objects.create(
+            test=test, question_text="Q1", options=["A", "B", "C", "D"], correct_option="0",
+            image_prompt="prompt 1",
+        )
+        q2 = TestQuestion.objects.create(
+            test=test, question_text="Q2", options=["A", "B", "C", "D"], correct_option="0",
+            image_prompt="prompt 2",
+        )
+        self.client.force_login(user)
+        self.client.post(
+            reverse("testing:answer", args=[test.test_id]),
+            {"question_id": q1.question_id, "answer": "A"},
+            HTTP_HX_REQUEST="true",
+        )
+        mock_apply.assert_called_once()
+        call_kwargs = mock_apply.call_args[1]
+        self.assertEqual(call_kwargs.get("args"), [q2.question_id])
+        self.assertEqual(call_kwargs.get("queue"), "batch-images")
+        self.assertEqual(call_kwargs.get("kwargs"), {"slot_kind": "batch"})

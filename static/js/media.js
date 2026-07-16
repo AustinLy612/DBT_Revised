@@ -253,6 +253,63 @@
     });
   }
 
+  // ── Browser speech fallback ──
+  // This keeps teaching audio available when the server-side TTS provider is
+  // unavailable or not configured. It is intentionally only used as a fallback.
+  function _playBrowserSpeech(text, msgId) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance || !text) {
+      return false;
+    }
+
+    DBT_TTS.stop();
+
+    var utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-CN";
+    utterance.rate = 1;
+
+    var voices = window.speechSynthesis.getVoices();
+    var chineseVoice = voices.find(function (voice) {
+      return /^zh(-|_)?CN/i.test(voice.lang) || /chinese|中文/i.test(voice.name);
+    });
+    if (chineseVoice) {
+      utterance.voice = chineseVoice;
+    }
+
+    currentAudio = {
+      pause: function () { window.speechSynthesis.cancel(); },
+      load: function () {},
+      src: "",
+    };
+    currentAudioMsgId = msgId || null;
+    isAudioPlaying = true;
+    _autoPlayPending = false;
+    _setButtonPlaying(msgId);
+    _showAudioBar();
+
+    var status = document.getElementById("audio-bar-status");
+    if (status) {
+      status.textContent = "正在使用浏览器语音播报...";
+    }
+
+    function cleanup() {
+      if (currentAudioMsgId !== (msgId || null)) return;
+      currentAudio = null;
+      currentAudioMsgId = null;
+      isAudioPlaying = false;
+      _autoPlayPending = false;
+      _hideAudioBar();
+      _resetButton(msgId);
+    }
+
+    utterance.onend = cleanup;
+    utterance.onerror = function (event) {
+      console.error("Browser speech playback failed:", event.error);
+      cleanup();
+    };
+    window.speechSynthesis.speak(utterance);
+    return true;
+  }
+
   // ── Blob cache helper ──
   function _addToBlobCache(msgId, blob) {
     if (!msgId) return;
@@ -447,6 +504,9 @@
       })
       .catch(function (err) {
         console.error("TTS fallback error:", err);
+        if (_playBrowserSpeech(originalText || (fd.get("text") || ""), msgId)) {
+          return;
+        }
         _autoPlayPending = false;
         if (btn) { btn.disabled = false; btn.textContent = "🔊"; btn.title = "语音播报"; }
         var bar = document.getElementById("audio-player-bar");
@@ -824,11 +884,8 @@
                   return;
                 }
                 // Handle image generation
-                if (tc && tc.image_prompt) {
-                  DBT_Image.generate(tc.image_prompt, "teaching-image-area", {
-                    source: "teaching_scene",
-                    session_id: window.location.pathname.split("/")[2] || "",
-                  });
+                if (tc && tc.image_prompt && msgId) {
+                  DBT_Image.pollTeachingMessage(msgId, aiDiv);
                 }
               } else if (event.type === "error") {
                 var errMsg = event.message || "未知错误";
@@ -857,6 +914,44 @@
 
   // ── Image Generation ──
   window.DBT_Image = {
+    pollTeachingMessage: function (messageId, aiDiv) {
+      var pollUrl = "/teaching/message/" + messageId + "/image-status/";
+      var pollDiv = document.createElement("div");
+      pollDiv.className = "mt-2";
+      pollDiv.setAttribute("hx-get", pollUrl);
+      pollDiv.setAttribute("hx-trigger", "load, every 3s");
+      pollDiv.setAttribute("hx-swap", "outerHTML");
+      pollDiv.innerHTML =
+        '<div class="p-3 bg-purple-50 border border-purple-200 rounded-lg text-center">' +
+        '<div class="inline-block w-4 h-4 border-2 border-purple-200 border-t-purple-500 rounded-full animate-spin"></div>' +
+        '<span class="text-xs text-purple-600 ml-2">情景配图生成中...</span></div>';
+      if (aiDiv) {
+        var bubble = aiDiv.querySelector("div");
+        (bubble || aiDiv).appendChild(pollDiv);
+      }
+      if (window.htmx) window.htmx.process(pollDiv);
+      DBT_Chat.scrollToBottom();
+    },
+
+    generateScene: function (sessionId, prompt, targetId) {
+      var target = document.getElementById(targetId);
+      if (!target) return;
+      var csrfInput = document.querySelector('input[name="csrfmiddlewaretoken"]');
+      var formData = new FormData();
+      formData.append("prompt", prompt);
+      if (csrfInput) formData.append("csrfmiddlewaretoken", csrfInput.value);
+      fetch("/teaching/session/" + sessionId + "/generate-scene-image/", {
+        method: "POST",
+        body: formData,
+        headers: { "X-Requested-With": "XMLHttpRequest" },
+      })
+        .then(function (resp) { return resp.text(); })
+        .then(function (html) {
+          target.innerHTML = html;
+          if (window.htmx) window.htmx.process(target);
+        });
+    },
+
     generate: function (prompt, targetId, extraParams) {
       var target = document.getElementById(targetId);
       if (!target) return;

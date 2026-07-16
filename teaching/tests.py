@@ -1200,3 +1200,56 @@ class KeywordRiskUnitTests(TestCase):
         triggered, keywords = check_keyword_risk("我感到绝望")
         self.assertTrue(triggered)
         self.assertIn("绝望", keywords)
+
+
+class TeachingImageAsyncTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        ViewTestMixin.start_service_patches()
+
+    @classmethod
+    def tearDownClass(cls):
+        ViewTestMixin.stop_service_patches()
+        super().tearDownClass()
+
+    def setUp(self):
+        self.user = create_student("img_async_student")
+        self.client.login(username="img_async_student", password="testpass123")
+        self.session = create_session(self.user)
+        self.session.phase = TeachingSession.Phase.TEACHING
+        self.session.teaching_plan = MOCK_TEACHING_PLAN
+        self.session.save()
+        self.message = ChatMessage.objects.create(
+            session=self.session, user=self.user, role=ChatMessage.Role.ASSISTANT,
+            content="让我们一起练习呼吸。", image_prompt="学生在教室里做深呼吸，温暖插画风格",
+        )
+
+    @patch("media_app.tasks.generate_image_async.delay")
+    def test_stream_dispatch_triggers_celery(self, mock_delay):
+        from .views import _start_image_generation
+        _start_image_generation(self.session, self.message.image_prompt, self.message.message_id)
+        mock_delay.assert_called_once_with(
+            self.session.session_id, self.message.image_prompt, message_id=self.message.message_id,
+        )
+
+    def test_message_image_status_returns_spinner_while_pending(self):
+        from media_app.concurrency import set_image_status
+        set_image_status(self.message.message_id, "queued")
+        url = reverse("teaching:message_image_status", args=[self.message.message_id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("排队中", response.content.decode())
+
+    @patch("media_app.tasks.generate_scene_image_async.delay")
+    def test_generate_scene_image_dispatches_task(self, mock_delay):
+        url = reverse("teaching:generate_scene_image", args=[self.session.session_id])
+        response = self.client.post(url, {"prompt": "正念教室场景"})
+        self.assertEqual(response.status_code, 200)
+        mock_delay.assert_called_once()
+        args = mock_delay.call_args[0]
+        self.assertEqual(args[0], self.session.session_id)
+        self.assertEqual(args[1], "正念教室场景")
+        self.assertTrue(args[2])
+        self.assertIn("job_id=", response.content.decode())
+        self.assertIn("data-job-id=", response.content.decode())

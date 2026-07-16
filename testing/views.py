@@ -91,6 +91,8 @@ def test_view(request: HttpRequest, test_id: str) -> HttpResponse:
             if not q.user_answer:
                 current_question = q
                 break
+        if current_question:
+            ensure_question_image_dispatched(current_question)
 
     result_data = None
     if is_completed:
@@ -203,6 +205,14 @@ def answer_question_view(request: HttpRequest, test_id: str) -> HttpResponse:
         return response
 
     result = services.answer_question(question, answer_letter)
+
+    next_question = (
+        TestQuestion.objects.filter(test=test, user_answer="")
+        .order_by("created_at")
+        .first()
+    )
+    if next_question:
+        prefetch_question_image(next_question)
 
     return render(request, "testing/answer_partial.html", {
         "question": question,
@@ -345,6 +355,8 @@ def generate_question_image_view(request: HttpRequest, question_id: str) -> Http
 
     # Dispatch Celery task if no image yet
     if not question.temporary_image_url:
+        from media_app.concurrency import set_image_status
+        set_image_status(question_id, "queued")
         generate_test_question_image_async.delay(question_id)
 
     return _image_polling_html(question_id)
@@ -371,19 +383,20 @@ def question_image_status_view(request: HttpRequest, question_id: str) -> HttpRe
             '</div>'
         )
 
+    ensure_question_image_dispatched(question)
     return _image_polling_html(question_id)
 
 
 def _image_polling_html(question_id: str) -> HttpResponse:
-    """Return a spinner div that polls the image-status endpoint."""
+    from media_app.concurrency import get_image_status, wait_label_for_status
+    label = wait_label_for_status(get_image_status(question_id))
     poll_url = reverse("testing:question_image_status", kwargs={"question_id": question_id})
     return HttpResponse(
         '<div class="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-center"'
         f' hx-get="{poll_url}" hx-trigger="every 3s" hx-swap="outerHTML">'
         '<div class="inline-block w-4 h-4 border-2 border-purple-200 '
         'border-t-purple-500 rounded-full animate-spin"></div>'
-        '<span class="text-xs text-purple-600 ml-2">情景配图生成中...</span>'
-        '</div>'
+        f'<span class="text-xs text-purple-600 ml-2">{label}</span></div>'
     )
 
 
@@ -394,4 +407,33 @@ def _image_polling_html(question_id: str) -> HttpResponse:
 def _htmx_error(message: str) -> HttpResponse:
     return HttpResponse(
         f'<div class="text-red-500 text-sm p-3 bg-red-50 rounded-lg">{message}</div>'
+    )
+
+
+def ensure_question_image_dispatched(question: TestQuestion) -> None:
+    """Dispatch image generation for the current question only (on-demand)."""
+    if not question.image_prompt or question.temporary_image_url:
+        return
+    from media_app.concurrency import get_image_status, set_image_status
+
+    if get_image_status(question.question_id) in ("queued", "processing"):
+        return
+    set_image_status(question.question_id, "queued")
+    generate_test_question_image_async.delay(question.question_id)
+
+
+def prefetch_question_image(question: TestQuestion) -> None:
+    """Low-priority prefetch for the next question via batch queue."""
+    if not question.image_prompt or question.temporary_image_url:
+        return
+    from media_app.concurrency import get_image_status, set_image_status
+
+    if get_image_status(question.question_id) in ("queued", "processing"):
+        return
+    set_image_status(question.question_id, "queued")
+    generate_test_question_image_async.apply_async(
+        args=[question.question_id],
+        kwargs={"slot_kind": "batch"},
+        queue="batch-images",
+        countdown=2,
     )

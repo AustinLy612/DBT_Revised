@@ -1,0 +1,16 @@
+<div>
+    <div class="flex items-center justify-between mb-1">
+        <label class="text-sm font-medium text-gray-700">{{ label }}</label>
+        <span class="text-sm font-medium text-blue-600" x-text="{{ model }}"></span>
+    </div>
+    {% if field.errors %}
+    <p class="text-red-500 text-xs mb-1">{{ field.errors.0 }}</p>
+    {% endif %}
+    <input type="range" name="{{ field.name }}" min="1" max="10"
+           x-model="{{ model }}" class="w-full">
+    <div class="flex justify-between text-xs text-gray-400 mt-1">
+        <span>1</span>
+        <span>5</span>
+        <span>10</span>
+    </div>
+</div>

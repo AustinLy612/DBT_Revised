@@ -17,6 +17,7 @@ urlpatterns = [
     path("export/", include("export_app.urls")),
     path("reports/", include("reports.urls")),
     path("media/", include("media_app.urls")),
+    path("ema-log/", include("ema_log.urls")),
     # Health check
     path("health/", include("dbt_platform.health_urls")),
 ]

@@ -118,7 +118,7 @@ def run_document_pipeline(document_id: str, object_name: str, filename: str) -> 
     return len(chunk_objects)
 
 
-@shared_task(bind=True, max_retries=3, default_retry_delay=30)
+@shared_task(bind=True, max_retries=3, default_retry_delay=30, queue="documents")
 def process_document_async(self, document_id: str, object_name: str, filename: str):
     """Celery task: runs the document processing pipeline and updates status."""
     logger.info("Starting document processing: %s (%s)", document_id, filename)

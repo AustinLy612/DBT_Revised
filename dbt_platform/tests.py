@@ -99,3 +99,60 @@ class ReadinessCheckLoggingTests(TestCase):
             any("MinIO health check failed" in msg for msg in log_cm.output),
             f"Expected 'MinIO health check failed' in log output, got: {log_cm.output}"
         )
+
+
+class MetricsCheckTests(TestCase):
+    """Test /health/metrics/ operational monitoring endpoint."""
+
+    def test_metrics_returns_payload(self):
+        resp = self.client.get(reverse("metrics-check"))
+        self.assertIn(resp.status_code, (200, 503))
+        data = resp.json()
+        self.assertIn(data["status"], ("ok", "warning", "critical"))
+        self.assertIn("application", data)
+        self.assertIn("checks", data)
+        self.assertIn("celery", data)
+        self.assertIn("queues", data["celery"])
+        self.assertIn("image_slots", data["celery"])
+        self.assertIn("alerts", data)
+        self.assertIn("thresholds", data)
+
+    @patch("redis.from_url")
+    def test_metrics_critical_when_queue_backlog_high(self, mock_from_url):
+        mock_redis = mock_from_url.return_value
+        mock_redis.ping.return_value = True
+        mock_redis.llen.side_effect = lambda name: 60 if name == "celery" else 0
+
+        resp = self.client.get(reverse("metrics-check"))
+        self.assertEqual(resp.status_code, 503)
+        data = resp.json()
+        self.assertEqual(data["status"], "critical")
+        self.assertTrue(
+            any(alert["metric"] == "celery_queue_length" for alert in data["alerts"]),
+        )
+
+    @patch("redis.from_url")
+    def test_metrics_critical_when_interactive_images_backlog_high(self, mock_from_url):
+        mock_redis = mock_from_url.return_value
+        mock_redis.ping.return_value = True
+        mock_redis.llen.side_effect = lambda name: 55 if name == "interactive-images" else 0
+
+        resp = self.client.get(reverse("metrics-check"))
+        self.assertEqual(resp.status_code, 503)
+        data = resp.json()
+        self.assertTrue(
+            any(alert["metric"] == "celery_queue_interactive_images" for alert in data["alerts"]),
+        )
+        self.assertEqual(data["celery"]["queues"].get("interactive-images"), 55)
+
+    @patch("django.db.connections")
+    def test_metrics_critical_when_backend_degraded(self, mock_connections):
+        from django.db import DatabaseError
+
+        mock_connections.__getitem__.return_value.cursor.side_effect = DatabaseError("down")
+
+        resp = self.client.get(reverse("metrics-check"))
+        self.assertEqual(resp.status_code, 503)
+        data = resp.json()
+        self.assertEqual(data["status"], "critical")
+        self.assertNotEqual(data["checks"]["mongodb"], "ok")
