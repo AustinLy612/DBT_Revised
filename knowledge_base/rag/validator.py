@@ -25,6 +25,8 @@ _FIELD_ALIASES: dict[str, list[str]] = {
     "reason": ["rationale", "justification", "explanation", "reasoning"],
     "skill_difficulty": ["difficulty", "level", "difficulty_level"],
     "alternative_skills": ["alternatives", "backup_skills", "other_skills"],
+    "is_repeat": ["repeat", "is_repeated", "repeated"],
+    "repeat_justification": ["repeat_reason", "repeat_rationale", "why_repeat"],
     "transcribed_text": ["text", "transcription", "result"],
     "risk_level": ["level", "severity", "risk"],
     "risk_type": ["type", "category", "risk_category"],

@@ -19,6 +19,43 @@ from risk.services import check_keyword_risk  # noqa: F401 — re-exported for c
 
 logger = logging.getLogger("dbt_platform.teaching")
 
+# Recent completed teachings whose skills should not be re-recommended
+# unless the model provides an explicit, valid repeat justification.
+RECENT_SKILL_REPEAT_WINDOW = 3
+
+# Fallback module lookup when switching to an alternative skill.
+_SKILL_MODULE_HINTS: dict[str, str] = {
+    "观察呼吸": "正念",
+    "身体扫描": "正念",
+    "正念行走": "正念",
+    "正念饮食": "正念",
+    "正念聆听": "正念",
+    "观察-描述-参与": "正念",
+    "不评判练习": "正念",
+    "情绪命名": "情绪调节",
+    "情绪追踪": "情绪调节",
+    "相反行动": "情绪调节",
+    "ABC情绪分析": "情绪调节",
+    "积累积极情绪": "情绪调节",
+    "事实核查": "情绪调节",
+    "STOP技能": "痛苦耐受",
+    "TIP技能": "痛苦耐受",
+    "TIP技能（冷水刺激）": "痛苦耐受",
+    "转移注意力": "痛苦耐受",
+    "自我安抚": "痛苦耐受",
+    "自我安抚（五感）": "痛苦耐受",
+    "接受现实": "痛苦耐受",
+    "危机生存": "痛苦耐受",
+    "DEAR MAN沟通法": "人际效能",
+    "DEAR MAN": "人际效能",
+    "GIVE技巧": "人际效能",
+    "GIVE技巧（维护关系）": "人际效能",
+    "FAST技巧": "人际效能",
+    "FAST技巧（保持自尊）": "人际效能",
+    "设置边界": "人际效能",
+    "请求练习": "人际效能",
+}
+
 
 def create_session(user: models.Model) -> models.Model:
     """Create a new teaching session starting at pre_mood_recording phase."""
@@ -145,6 +182,174 @@ def run_personal_inquiry(
 # Phase 3: Info collection — read questionnaire + history + tests
 # ═══════════════════════════════════════════════════════════════
 
+def _session_counts_as_taught(session: models.Model) -> bool:
+    """True when a prior session actually entered teaching with a concrete skill."""
+    skill = (session.selected_skill or "").strip()
+    if not skill:
+        return False
+    if session.phase == session.Phase.TEACHING:
+        return True
+    if session.status in (
+        session.Status.COMPLETED,
+        session.Status.USER_TERMINATED,
+        session.Status.STOPPED_BY_RISK,
+    ) and session.teaching_plan:
+        return True
+    return False
+
+
+def _normalize_skill_name(skill: str) -> str:
+    return (skill or "").strip()
+
+
+def _collect_selection_context(
+    session: models.Model,
+    user: models.Model,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[str], list[str], list[str]]:
+    """Build teaching history, test stats, and repeat-avoidance lists.
+
+    Returns:
+        teaching_history, test_stats, history_skills (recent-first),
+        recent_avoid_skills, failed_skills
+    """
+    from .models import TeachingSession
+    from testing.models import Test
+
+    previous_sessions = TeachingSession.objects.filter(
+        user=user
+    ).exclude(
+        session_id=session.session_id
+    ).order_by("-started_at")[:20]
+
+    teaching_history: list[dict[str, Any]] = []
+    history_skills: list[str] = []
+    for s in previous_sessions:
+        skill = _normalize_skill_name(s.selected_skill or "")
+        entry = {
+            "skill": skill,
+            "module": s.selected_module or "",
+            "status": s.status,
+            "phase": s.phase,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "counts_as_taught": _session_counts_as_taught(s),
+        }
+        teaching_history.append(entry)
+        if entry["counts_as_taught"] and skill:
+            history_skills.append(skill)
+
+    recent_avoid_skills: list[str] = []
+    for skill in history_skills:
+        if skill not in recent_avoid_skills:
+            recent_avoid_skills.append(skill)
+        if len(recent_avoid_skills) >= RECENT_SKILL_REPEAT_WINDOW:
+            break
+
+    previous_tests = Test.objects.filter(user=user).order_by("-created_at")[:20]
+    test_history: list[dict[str, Any]] = []
+    tested_skills: set[str] = set()
+    failed_skills: list[str] = []
+    for t in previous_tests:
+        session_skill = _normalize_skill_name(
+            t.session.selected_skill if t.session_id else ""
+        )
+        if session_skill:
+            tested_skills.add(session_skill)
+        if session_skill and not t.passed and session_skill not in failed_skills:
+            failed_skills.append(session_skill)
+        test_history.append({
+            "session_skill": session_skill,
+            "attempt_no": t.attempt_no,
+            "correct_count": t.correct_count,
+            "total_questions": t.total_questions,
+            "passed": t.passed,
+            "status": t.status,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        })
+
+    total_pass = sum(1 for t in previous_tests if t.passed)
+    test_stats = {
+        "total_tests": len(previous_tests),
+        "total_passed": total_pass,
+        "pass_rate": round(total_pass / len(previous_tests), 2) if previous_tests else None,
+        "tested_skills": sorted(tested_skills),
+        "failed_skills": failed_skills,
+        "recent_tests": test_history[:10],
+    }
+    return teaching_history, test_stats, history_skills, recent_avoid_skills, failed_skills
+
+
+def _apply_repeat_guard(
+    result: Any,
+    recent_avoid_skills: list[str],
+    failed_skills: list[str],
+) -> Any:
+    """Block unjustified repeats of recent skills; fall back to unlearned alternatives."""
+    selected = _normalize_skill_name(getattr(result, "selected_skill", "") or "")
+    avoid_set = set(recent_avoid_skills)
+    if not selected or selected not in avoid_set:
+        return result
+
+    justification = (getattr(result, "repeat_justification", "") or "").strip()
+    is_repeat = bool(getattr(result, "is_repeat", False))
+    failed_set = set(failed_skills)
+    has_valid_exception = is_repeat and bool(justification)
+    if not has_valid_exception and selected in failed_set:
+        reason = (getattr(result, "reason", "") or "")
+        if any(token in reason for token in ("未通过", "薄弱", "巩固", "复训", "未掌握")):
+            result.is_repeat = True
+            if not justification:
+                result.repeat_justification = (
+                    f"该技能「{selected}」历史测试未掌握，需要巩固。"
+                )
+            has_valid_exception = True
+
+    if has_valid_exception:
+        if not result.repeat_justification:
+            result.repeat_justification = justification
+        result.is_repeat = True
+        logger.info(
+            "Allowing justified skill repeat: %s (%s)",
+            selected,
+            result.repeat_justification[:120],
+        )
+        return result
+
+    alternatives = [
+        _normalize_skill_name(s)
+        for s in (getattr(result, "alternative_skills", None) or [])
+        if _normalize_skill_name(s) and _normalize_skill_name(s) not in avoid_set
+    ]
+    if not alternatives:
+        logger.warning(
+            "Unjustified repeat of %s with no safe alternative; keeping original",
+            selected,
+        )
+        result.is_repeat = True
+        result.repeat_justification = (
+            result.repeat_justification
+            or "模型推荐了近期已学技能但未给出有效复训理由，且无可用备选。"
+        )
+        return result
+
+    fallback = alternatives[0]
+    original = selected
+    result.selected_skill = fallback
+    hinted_module = _SKILL_MODULE_HINTS.get(fallback)
+    if hinted_module:
+        result.selected_module = hinted_module
+    result.is_repeat = False
+    result.repeat_justification = ""
+    note = (
+        f"原推荐「{original}」属于近期已学技能且缺少有效复训理由，"
+        f"已回退为未学备选「{fallback}」。"
+    )
+    existing_reason = (getattr(result, "reason", "") or "").strip()
+    result.reason = f"{note} {existing_reason}".strip()
+    result.alternative_skills = [s for s in alternatives[1:] if s != fallback][:3]
+    logger.info("Blocked unjustified skill repeat %s → %s", original, fallback)
+    return result
+
+
 def run_info_collection(session: models.Model, user: models.Model) -> dict[str, Any]:
     """Gather all user context: questionnaire, teaching history, test records.
 
@@ -154,8 +359,6 @@ def run_info_collection(session: models.Model, user: models.Model) -> dict[str, 
 
     Returns a dict with collected context including test performance data.
     """
-    from .models import TeachingSession
-
     profile = getattr(user, "profile", None)
     profile_dict = None
     if profile:
@@ -167,68 +370,36 @@ def run_info_collection(session: models.Model, user: models.Model) -> dict[str, 
             "concern_tags": profile.concern_tags,
         }
 
-    # ── Historical teaching sessions ──
-    previous_sessions = TeachingSession.objects.filter(
-        user=user
-    ).exclude(
-        session_id=session.session_id
-    ).order_by("-started_at")[:10]
-
-    teaching_history = []
-    for s in previous_sessions:
-        teaching_history.append({
-            "skill": s.selected_skill or "",
-            "module": s.selected_module or "",
-            "status": s.status,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-        })
-
-    # ── Historical test records ──
-    from testing.models import Test
-
-    previous_tests = Test.objects.filter(
-        user=user
-    ).order_by("-created_at")[:20]
-
-    test_history = []
-    tested_skills: set[str] = set()
-    for t in previous_tests:
-        session_skill = t.session.selected_skill or ""
-        if session_skill:
-            tested_skills.add(session_skill)
-        test_history.append({
-            "session_skill": session_skill,
-            "attempt_no": t.attempt_no,
-            "correct_count": t.correct_count,
-            "total_questions": t.total_questions,
-            "passed": t.passed,
-            "status": t.status,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-        })
-
-    # Aggregate test performance
-    total_pass = sum(1 for t in previous_tests if t.passed)
-    test_stats = {
-        "total_tests": len(previous_tests),
-        "total_passed": total_pass,
-        "pass_rate": round(total_pass / len(previous_tests), 2) if previous_tests else None,
-        "tested_skills": sorted(tested_skills),
-        "recent_tests": test_history[:10],
-    }
+    teaching_history, test_stats, history_skills, recent_avoid_skills, failed_skills = (
+        _collect_selection_context(session, user)
+    )
 
     collected_context = {
         "profile": profile_dict,
         "teaching_history": teaching_history,
         "test_stats": test_stats,
+        "recent_avoid_skills": recent_avoid_skills,
     }
 
     logger.info(
-        "Info collection complete for session %s: %d previous teachings, %d previous tests",
-        session.session_id, len(teaching_history), len(previous_tests),
+        "Info collection complete for session %s: %d previous teachings, "
+        "%d previous tests, avoid=%s",
+        session.session_id,
+        len([h for h in teaching_history if h.get("counts_as_taught")]),
+        test_stats["total_tests"],
+        recent_avoid_skills,
     )
 
-    # ── Auto-run skill selection ──
-    _run_skill_selection_inner(session, user, profile, teaching_history, test_stats)
+    _run_skill_selection_inner(
+        session,
+        user,
+        profile,
+        teaching_history,
+        test_stats,
+        history_skills=history_skills,
+        recent_avoid_skills=recent_avoid_skills,
+        failed_skills=failed_skills,
+    )
 
     session.phase = session.Phase.SKILL_SELECTION
     session.save(update_fields=["phase", "selected_module", "selected_skill", "selection_reason", "rag_context_ids"])
@@ -246,6 +417,10 @@ def _run_skill_selection_inner(
     profile: Any,
     teaching_history: list[dict[str, Any]],
     test_stats: dict[str, Any],
+    *,
+    history_skills: list[str] | None = None,
+    recent_avoid_skills: list[str] | None = None,
+    failed_skills: list[str] | None = None,
 ) -> dict[str, Any]:
     """Core skill selection logic — shared by info_collection and manual calls.
 
@@ -255,19 +430,39 @@ def _run_skill_selection_inner(
     from knowledge_base.rag.chains import generate_skill_selection
     from knowledge_base.rag.retriever import get_retriever
 
-    history_skills = [h["skill"] for h in teaching_history if h["skill"]]
+    if history_skills is None:
+        history_skills = [
+            h["skill"] for h in teaching_history
+            if h.get("skill") and h.get("counts_as_taught", True)
+        ]
+    if recent_avoid_skills is None:
+        recent_avoid_skills = []
+        for skill in history_skills:
+            if skill not in recent_avoid_skills:
+                recent_avoid_skills.append(skill)
+            if len(recent_avoid_skills) >= RECENT_SKILL_REPEAT_WINDOW:
+                break
+    if failed_skills is None:
+        failed_skills = list(test_stats.get("failed_skills") or [])
+        if not failed_skills:
+            failed_skills = [
+                t["session_skill"] for t in test_stats.get("recent_tests", [])
+                if not t.get("passed") and t.get("session_skill")
+            ]
+            seen: set[str] = set()
+            unique_failed: list[str] = []
+            for skill in failed_skills:
+                if skill not in seen:
+                    seen.add(skill)
+                    unique_failed.append(skill)
+            failed_skills = unique_failed
 
-    # Build an enriched retrieval query using test performance data
     retrieval_query = "DBT具体技能 青少年 正念 情绪调节 痛苦耐受 人际效能"
-    failed_skills = [
-        t["session_skill"] for t in test_stats["recent_tests"]
-        if not t["passed"] and t["session_skill"]
-    ]
     if failed_skills:
-        unique_failed = list(dict.fromkeys(failed_skills))[:3]
-        retrieval_query += " 薄弱技能:" + ",".join(unique_failed)
+        retrieval_query += " 薄弱技能:" + ",".join(failed_skills[:3])
+    if recent_avoid_skills:
+        retrieval_query += " 近期已学请优先其他技能:" + ",".join(recent_avoid_skills)
 
-    # Read mood value for skill selection context
     mood_value = None
     if session.pre_mood_id:
         from mood.models import MoodRecord
@@ -281,20 +476,33 @@ def _run_skill_selection_inner(
     result = generate_skill_selection(
         profile=profile,
         history_skills=history_skills,
+        recent_avoid_skills=recent_avoid_skills,
+        failed_skills=failed_skills,
         retriever=retriever,
         retrieval_query=retrieval_query,
         personal_context=session.personal_context or "",
         mood_value=mood_value,
     )
 
+    result = _apply_repeat_guard(result, recent_avoid_skills, failed_skills)
+
     session.selected_module = result.selected_module
     session.selected_skill = result.selected_skill
-    session.selection_reason = result.reason
+    reason = result.reason or ""
+    if result.is_repeat and result.repeat_justification:
+        reason = f"{reason} 【复训理由】{result.repeat_justification}".strip()
+    session.selection_reason = reason
     session.rag_context_ids = result.source_chunk_ids
     session.save(update_fields=["selected_module", "selected_skill", "selection_reason", "rag_context_ids"])
 
-    logger.info("Skill selected for session %s: %s (personal_context_len=%d)",
-                session.session_id, session.selected_skill, len(session.personal_context or ""))
+    logger.info(
+        "Skill selected for session %s: %s (repeat=%s, personal_context_len=%d, avoid=%s)",
+        session.session_id,
+        session.selected_skill,
+        result.is_repeat,
+        len(session.personal_context or ""),
+        recent_avoid_skills,
+    )
     return result.model_dump()
 
 
@@ -303,36 +511,20 @@ def run_skill_selection(session: models.Model, user: models.Model) -> dict[str, 
 
     Also reads Test records so skill selection can account for test performance.
     """
-    from .models import TeachingSession
-    from testing.models import Test
-
     profile = getattr(user, "profile", None)
-
-    # Teaching history
-    previous_sessions = TeachingSession.objects.filter(
-        user=user
-    ).exclude(session_id=session.session_id).order_by("-started_at")[:10]
-    teaching_history = [
-        {"skill": s.selected_skill or "", "module": s.selected_module or "",
-         "status": s.status, "started_at": s.started_at.isoformat() if s.started_at else None}
-        for s in previous_sessions
-    ]
-
-    # Test history
-    previous_tests = Test.objects.filter(user=user).order_by("-created_at")[:20]
-    test_stats = {
-        "total_tests": len(previous_tests),
-        "total_passed": sum(1 for t in previous_tests if t.passed),
-        "tested_skills": sorted(set(
-            t.session.selected_skill for t in previous_tests if t.session.selected_skill
-        )),
-        "recent_tests": [
-            {"session_skill": t.session.selected_skill or "", "passed": t.passed}
-            for t in previous_tests[:10]
-        ],
-    }
-
-    return _run_skill_selection_inner(session, user, profile, teaching_history, test_stats)
+    teaching_history, test_stats, history_skills, recent_avoid_skills, failed_skills = (
+        _collect_selection_context(session, user)
+    )
+    return _run_skill_selection_inner(
+        session,
+        user,
+        profile,
+        teaching_history,
+        test_stats,
+        history_skills=history_skills,
+        recent_avoid_skills=recent_avoid_skills,
+        failed_skills=failed_skills,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

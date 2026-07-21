@@ -1053,6 +1053,176 @@ class StateTransitionTests(TestCase):
         self.assertIn("chunk_001", session.rag_context_ids)
 
 
+class SkillRepeatPolicyTests(TestCase):
+    """Server-side repeat suppression for recent completed teachings."""
+
+    def setUp(self):
+        self.user = create_student("repeat_policy")
+
+    def _taught_session(self, skill, module="正念", *, days_ago=0):
+        from django.utils import timezone
+        from datetime import timedelta
+
+        session = TeachingSession.objects.create(
+            user=self.user,
+            selected_skill=skill,
+            selected_module=module,
+            phase=TeachingSession.Phase.TEACHING,
+            status=TeachingSession.Status.COMPLETED,
+            teaching_plan={"plan_steps": [{"step_number": 1, "title": "练习", "content": "x"}]},
+        )
+        if days_ago:
+            TeachingSession.objects.filter(pk=session.pk).update(
+                started_at=timezone.now() - timedelta(days=days_ago)
+            )
+            session.refresh_from_db()
+        return session
+
+    def test_unjustified_repeat_falls_back_to_alternative(self):
+        from .services import run_skill_selection
+        from knowledge_base.rag.schemas import SkillSelectionResult
+
+        self._taught_session("观察呼吸", days_ago=2)
+        self._taught_session("身体扫描", days_ago=1)
+        session = TeachingSession.objects.create(
+            user=self.user,
+            phase=TeachingSession.Phase.SKILL_SELECTION,
+            personal_context="最近有点累。",
+        )
+        mock = {
+            **MOCK_SKILL_SELECTION,
+            "selected_skill": "观察呼吸",
+            "alternative_skills": ["STOP技能", "情绪命名"],
+            "is_repeat": False,
+            "repeat_justification": "",
+        }
+        with patch(
+            "knowledge_base.rag.chains.generate_skill_selection",
+            return_value=SkillSelectionResult(**mock),
+        ):
+            mock_ret = MagicMock()
+            mock_ret.search_with_context.return_value = []
+            with patch("knowledge_base.rag.retriever.get_retriever", return_value=mock_ret):
+                run_skill_selection(session, self.user)
+
+        session.refresh_from_db()
+        self.assertEqual(session.selected_skill, "STOP技能")
+        self.assertEqual(session.selected_module, "痛苦耐受")
+        self.assertIn("回退", session.selection_reason)
+
+    def test_justified_repeat_is_kept(self):
+        from .services import run_skill_selection
+        from knowledge_base.rag.schemas import SkillSelectionResult
+
+        self._taught_session("观察呼吸", days_ago=1)
+        session = TeachingSession.objects.create(
+            user=self.user,
+            phase=TeachingSession.Phase.SKILL_SELECTION,
+            personal_context="考试前又心跳很快，想再练一次呼吸。",
+        )
+        mock = {
+            **MOCK_SKILL_SELECTION,
+            "selected_skill": "观察呼吸",
+            "reason": "与考试前生理紧张高度匹配。",
+            "alternative_skills": ["身体扫描"],
+            "is_repeat": True,
+            "repeat_justification": "本次明确描述考试前心跳加速，与观察呼吸场景一致。",
+        }
+        with patch(
+            "knowledge_base.rag.chains.generate_skill_selection",
+            return_value=SkillSelectionResult(**mock),
+        ):
+            mock_ret = MagicMock()
+            mock_ret.search_with_context.return_value = []
+            with patch("knowledge_base.rag.retriever.get_retriever", return_value=mock_ret):
+                run_skill_selection(session, self.user)
+
+        session.refresh_from_db()
+        self.assertEqual(session.selected_skill, "观察呼吸")
+        self.assertIn("复训理由", session.selection_reason)
+
+    def test_failed_test_soft_allows_repeat_from_reason(self):
+        from .services import run_skill_selection
+        from knowledge_base.rag.schemas import SkillSelectionResult
+        from testing.models import Test as TestModel
+
+        prev = self._taught_session("观察呼吸", days_ago=1)
+        TestModel.objects.create(
+            session=prev,
+            user=self.user,
+            total_questions=5,
+            correct_count=1,
+            passed=False,
+            status=TestModel.Status.COMPLETED,
+        )
+        session = TeachingSession.objects.create(
+            user=self.user,
+            phase=TeachingSession.Phase.SKILL_SELECTION,
+            personal_context="还是掌握不好。",
+        )
+        mock = {
+            **MOCK_SKILL_SELECTION,
+            "selected_skill": "观察呼吸",
+            "reason": "该技能测试未通过，需要巩固。",
+            "alternative_skills": ["身体扫描"],
+            "is_repeat": False,
+            "repeat_justification": "",
+        }
+        with patch(
+            "knowledge_base.rag.chains.generate_skill_selection",
+            return_value=SkillSelectionResult(**mock),
+        ):
+            mock_ret = MagicMock()
+            mock_ret.search_with_context.return_value = []
+            with patch("knowledge_base.rag.retriever.get_retriever", return_value=mock_ret):
+                run_skill_selection(session, self.user)
+
+        session.refresh_from_db()
+        self.assertEqual(session.selected_skill, "观察呼吸")
+        self.assertIn("复训理由", session.selection_reason)
+
+    def test_incomplete_sessions_do_not_enter_avoid_window(self):
+        from .services import _collect_selection_context
+
+        TeachingSession.objects.create(
+            user=self.user,
+            selected_skill="观察呼吸",
+            selected_module="正念",
+            phase=TeachingSession.Phase.PRE_MOOD_RECORDING,
+            status=TeachingSession.Status.ONGOING,
+        )
+        session = TeachingSession.objects.create(
+            user=self.user,
+            phase=TeachingSession.Phase.SKILL_SELECTION,
+        )
+        _history, _stats, history_skills, avoid, _failed = _collect_selection_context(
+            session, self.user
+        )
+        self.assertEqual(history_skills, [])
+        self.assertEqual(avoid, [])
+
+    def test_custom_skill_confirm_still_allows_manual_repeat(self):
+        """Manual custom_skill path is not blocked by AI repeat guard."""
+        self._taught_session("观察呼吸", days_ago=1)
+        session = TeachingSession.objects.create(
+            user=self.user,
+            selected_skill="身体扫描",
+            selected_module="正念",
+            phase=TeachingSession.Phase.SKILL_SELECTION,
+            status=TeachingSession.Status.ONGOING,
+        )
+        self.client.login(username="repeat_policy", password="testpass123")
+        with patch("teaching.views.services.run_teaching_plan") as mock_plan:
+            mock_plan.return_value = MOCK_TEACHING_PLAN
+            resp = self.client.post(
+                reverse("teaching:confirm_skill", args=[session.session_id]),
+                {"custom_skill": "观察呼吸"},
+            )
+        session.refresh_from_db()
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(session.selected_skill, "观察呼吸")
+
+
 # ═══════════════════════════════════════════════════════════
 # Authorization Tests
 # ═══════════════════════════════════════════════════════════

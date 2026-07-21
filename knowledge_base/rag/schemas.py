@@ -66,6 +66,14 @@ class SkillSelectionResult(BaseModel):
         default_factory=list,
         description="备选技能列表（2-3个）",
     )
+    is_repeat: bool = Field(
+        default=False,
+        description="是否推荐了近期已学过的技能（复训）",
+    )
+    repeat_justification: str = Field(
+        default="",
+        description="若 is_repeat=true，必须说明允许复训的具体理由；否则留空",
+    )
     source_chunk_ids: list[str] = Field(
         default_factory=list,
         description="支撑推荐的知识库chunk ID列表",

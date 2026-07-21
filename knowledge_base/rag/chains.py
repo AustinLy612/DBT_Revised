@@ -134,6 +134,8 @@ def generate_skill_selection(
     *,
     profile: Any = None,
     history_skills: list[str] | None = None,
+    recent_avoid_skills: list[str] | None = None,
+    failed_skills: list[str] | None = None,
     available_modules: list[str] | None = None,
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
@@ -157,6 +159,8 @@ def generate_skill_selection(
     messages = build_skill_selection_messages(
         profile=profile,
         history_skills=history_skills,
+        recent_avoid_skills=recent_avoid_skills,
+        failed_skills=failed_skills,
         available_modules=available_modules,
         retrieval_chunks=chunks,
         personal_context=personal_context,

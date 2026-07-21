@@ -181,24 +181,33 @@ DBT技能体系结构（模块 → 具体技能示例）：
 - 人际效能 → DEAR MAN沟通法、GIVE技巧（维护关系）、FAST技巧（保持自尊）、设置边界、请求练习
 
 推荐规则：
-1. 优先推荐学生尚未学过的具体技能
+1. 优先推荐学生尚未学过的具体技能；优先同模块未学技能，其次再跨模块
 2. 结合学生的困扰标签和**近期个人情况**选择最相关的技能（如学生提到最近考试压力大→正念呼吸或STOP技能；提到和同学闹矛盾→人际效能相关技能）
 3. 学生主动分享的近期经历和感受是最重要的推荐依据，优先级高于历史数据
-4. 考虑学生历史测试中薄弱环节涉及的技能，重点强化
-5. 参考学生年龄和年级选择难度适当的技能
-6. 初级技能的优先级高于中高级（确保基础扎实）
+4. **近期已完成教学的技能默认禁止再次推荐**（见用户消息中的“近期避免重复列表”）
+5. 仅在以下例外时允许推荐近期已学技能，并必须设置 is_repeat=true 且填写 repeat_justification：
+   a) 学生本次描述的具体问题与该技能要处理的场景高度一致、明确适配；或
+   b) 历史测试显示该技能尚未掌握、需要巩固
+6. 若无上述例外，即使该技能“也比较合适”，也必须改选未学过的相关技能
+7. 考虑学生历史测试中薄弱环节涉及的技能，重点强化（可构成复训例外）
+8. 参考学生年龄和年级选择难度适当的技能；初级技能的优先级通常高于中高级
 
 === 输出格式（最重要！违反将导致系统错误）===
 
-你必须输出一个纯JSON对象。正确输出示例：
-{{"selected_module": "正念", "selected_skill": "观察呼吸", "reason": "学生近期表达较多考试焦虑，且未学习过正念相关技能。观察呼吸是正念最基础且最实用的技能，随时随地可以使用，非常适合作为DBT入门。", "skill_difficulty": "初级", "alternative_skills": ["STOP技能", "情绪命名"], "source_chunk_ids": ["chunk_001"]}}
+你必须输出一个纯JSON对象。正确输出示例（新技能，非复训）：
+{{"selected_module": "正念", "selected_skill": "身体扫描", "reason": "学生近期考试焦虑，且刚学过观察呼吸；本次改学身体扫描以巩固正念基础并扩展身体觉察。", "skill_difficulty": "初级", "alternative_skills": ["STOP技能", "情绪命名"], "is_repeat": false, "repeat_justification": "", "source_chunk_ids": ["chunk_001"]}}
+
+复训示例（仅例外时使用）：
+{{"selected_module": "正念", "selected_skill": "观察呼吸", "reason": "学生再次描述考试前心跳加速、无法平静，与观察呼吸高度匹配。", "skill_difficulty": "初级", "alternative_skills": ["身体扫描", "STOP技能"], "is_repeat": true, "repeat_justification": "本次明确描述考试前生理紧张，与已学观察呼吸场景一致；且该技能测试未通过，需要巩固。", "source_chunk_ids": []}}
 
 字段说明：
 - selected_module：技能所属的DBT模块名称（正念、情绪调节、痛苦耐受、人际效能 之一）
 - selected_skill：推荐的具体技能名称（必须是具体技能，如"观察呼吸"，不能是宽泛的模块名如"正念"）
 - reason：推荐理由，结合学生档案和历史记录
 - skill_difficulty：初级、中级 或 高级
-- alternative_skills：备选具体技能列表（2-3个）
+- alternative_skills：备选具体技能列表（2-3个，优先放未学过的技能，供系统在无有效复训理由时回退）
+- is_repeat：是否在推荐近期已完成的技能；默认 false
+- repeat_justification：仅当 is_repeat=true 时填写允许复训的具体理由；否则必须为空字符串
 - source_chunk_ids：支撑推荐的知识库chunk ID列表
 
 关键禁忌：绝对不要输出 "type": "object" 这类JSON Schema元数据；只输出纯JSON对象。
@@ -210,6 +219,8 @@ def build_skill_selection_messages(
     *,
     profile: Any = None,
     history_skills: list[str] | None = None,
+    recent_avoid_skills: list[str] | None = None,
+    failed_skills: list[str] | None = None,
     available_modules: list[str] | None = None,
     retrieval_chunks: list[dict[str, Any]] | None = None,
     personal_context: str = "",
@@ -219,7 +230,10 @@ def build_skill_selection_messages(
 
     Args:
         profile: UserProfile object or dict.
-        history_skills: Previously learned skill names.
+        history_skills: Previously learned skill names (most recent first).
+        recent_avoid_skills: Skills from the recent completed-teaching window
+            that should not be repeated without an explicit exception.
+        failed_skills: Skills with failed/unmastered test history.
         available_modules: Available module names with skills.
         retrieval_chunks: Retrieved knowledge base chunks.
         personal_context: Student's recent personal situation/experiences.
@@ -231,6 +245,8 @@ def build_skill_selection_messages(
 
     profile_text = _format_profile(profile)
     history_text = "、".join(history_skills) if history_skills else "无历史记录"
+    avoid_text = "、".join(recent_avoid_skills) if recent_avoid_skills else "无（可自由选择）"
+    failed_text = "、".join(failed_skills) if failed_skills else "无"
     modules_text = "、".join(available_modules) if available_modules else (
         "正念（具体技能：观察呼吸、身体扫描、正念行走、正念饮食、观察-描述-参与）| "
         "情绪调节（具体技能：情绪命名、事实核查、相反行动、ABC情绪分析）| "
@@ -257,8 +273,14 @@ def build_skill_selection_messages(
 ## 学生档案
 {profile_text}
 
-{personal_section}## 已学技能历史
+{personal_section}## 已学技能历史（按最近完成顺序，越靠前越近）
 {history_text}
+
+## 近期避免重复列表（默认禁止再推荐，除非符合复训例外）
+{avoid_text}
+
+## 测试薄弱/未通过技能（可作为复训例外依据）
+{failed_text}
 
 ## 可选模块及其具体技能
 {modules_text}
@@ -266,7 +288,10 @@ def build_skill_selection_messages(
 ## 检索到的知识库内容
 {context_text}
 
-请选择一个具体技能（如"观察呼吸""STOP技能""情绪命名"等），并明确其所属模块。以JSON格式输出推荐结果。注意：只输出纯JSON对象，以{{开头、以}}结尾。"""
+请选择一个具体技能（如"观察呼吸""STOP技能""情绪命名"等），并明确其所属模块。
+若所选技能在“近期避免重复列表”中，必须 is_repeat=true 且填写 repeat_justification；否则 is_repeat=false 且 repeat_justification=""。
+alternative_skills 请优先给出未出现在近期避免重复列表中的备选。
+以JSON格式输出推荐结果。注意：只输出纯JSON对象，以{{开头、以}}结尾。"""
 
     return [
         {"role": "system", "content": system},

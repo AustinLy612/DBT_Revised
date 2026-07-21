@@ -73,10 +73,13 @@ def create_profile(user):
 # ── Valid mock LLM responses (satisfy every schema) ──
 
 VALID_SKILL_SELECTION = {
+    "selected_module": "正念",
     "selected_skill": "观察呼吸",
     "reason": "根据学生档案，对情绪管理有需求，观察呼吸是正念的基础技能，适合初学者",
     "skill_difficulty": "初级",
     "alternative_skills": ["情绪命名", "转移注意力"],
+    "is_repeat": False,
+    "repeat_justification": "",
     "source_chunk_ids": [],
 }
 
@@ -159,9 +162,27 @@ class SkillSelectionSchemaTests(TestCase):
             SkillSelectionResult(**data)
 
     def test_defaults_applied(self):
-        result = SkillSelectionResult(selected_skill="正念", reason="好", skill_difficulty="初级")
+        result = SkillSelectionResult(
+            selected_module="正念",
+            selected_skill="正念",
+            reason="好",
+            skill_difficulty="初级",
+        )
         self.assertEqual(result.alternative_skills, [])
         self.assertEqual(result.source_chunk_ids, [])
+        self.assertFalse(result.is_repeat)
+        self.assertEqual(result.repeat_justification, "")
+
+    def test_repeat_fields_accepted(self):
+        result = SkillSelectionResult(
+            **{
+                **VALID_SKILL_SELECTION,
+                "is_repeat": True,
+                "repeat_justification": "学生再次描述考试焦虑，且该技能测试未通过。",
+            }
+        )
+        self.assertTrue(result.is_repeat)
+        self.assertIn("测试未通过", result.repeat_justification)
 
 
 class TeachingPlanSchemaTests(TestCase):
@@ -297,7 +318,9 @@ class PromptTemplateTests(TestCase):
     def test_skill_selection_messages_structure(self):
         msgs = self._import_prompt("build_skill_selection_messages")(
             profile=self.profile,
-            history_skills=["观察呼吸"],
+            history_skills=["观察呼吸", "情绪命名"],
+            recent_avoid_skills=["观察呼吸", "情绪命名"],
+            failed_skills=["情绪命名"],
             available_modules=["正念", "情绪调节"],
             retrieval_chunks=[{"chunk_text": "正念是DBT核心技能", "metadata": {}}],
         )
@@ -305,6 +328,11 @@ class PromptTemplateTests(TestCase):
         self.assertIn("JSON", msgs[0]["content"])
         self.assertIn("正念是DBT核心技能", msgs[1]["content"])
         self.assertIn("观察呼吸", msgs[1]["content"])
+        self.assertIn("近期避免重复列表", msgs[1]["content"])
+        self.assertIn("已学技能历史（按最近完成顺序", msgs[1]["content"])
+        self.assertIn("测试薄弱", msgs[1]["content"])
+        self.assertIn("is_repeat", msgs[0]["content"])
+        self.assertIn("默认禁止再次推荐", msgs[0]["content"])
 
     def test_teaching_plan_messages_structure(self):
         msgs = self._import_prompt("build_teaching_plan_messages")(
