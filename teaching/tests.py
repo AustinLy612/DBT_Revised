@@ -10,7 +10,7 @@ Coverage:
 
 Mock strategy:
 - View tests mock teaching.services functions (the API boundary that calls RAG)
-- Service tests mock knowledge_base.rag.chains functions (the DeepSeek/Qdrant boundary)
+- Service tests mock knowledge_base.rag.chains functions (the LLM/Qdrant boundary)
 """
 
 from unittest.mock import MagicMock, patch
@@ -134,7 +134,7 @@ class ViewTestMixin:
     """Mixin that patches RAG chain functions and retriever for view tests.
 
     Patches at the knowledge_base.rag level so the REAL teaching.services
-    functions run (and update session fields), but without calling DeepSeek
+    functions run (and update session fields), but without calling the LLM
     or Qdrant.
 
     The retriever is replaced with a mock so search_with_context returns
@@ -166,6 +166,8 @@ class ViewTestMixin:
                   return_value=SkillSelectionResult(**MOCK_SKILL_SELECTION)),
             patch("knowledge_base.rag.chains.generate_teaching_plan",
                   return_value=TeachingPlan(**MOCK_TEACHING_PLAN)),
+            patch("knowledge_base.rag.chains.generate_teaching_opening",
+                  return_value=TeachingContent(**MOCK_TEACHING_CONTENT)),
             patch("knowledge_base.rag.chains.generate_teaching_content",
                   return_value=TeachingContent(**MOCK_TEACHING_CONTENT)),
             patch("knowledge_base.rag.chains.generate_teaching_summary",
@@ -334,6 +336,98 @@ class SessionCreationTests(TestCase):
         )
         self.assertRedirects(response, reverse("teaching:session", args=[session.session_id]))
 
+    @patch("teaching.services.run_personal_inquiry")
+    def test_duplicate_personal_inquiry_is_suppressed_while_processing(self, mock_run):
+        self.client.post(reverse("teaching:start"))
+        session = TeachingSession.objects.first()
+        session.phase = TeachingSession.Phase.INFO_COLLECTION
+        session.save(update_fields=["phase"])
+
+        response = self.client.post(
+            reverse("teaching:personal_inquiry", args=[session.session_id]),
+            {"personal_context": "重复提交"},
+        )
+
+        self.assertRedirects(response, reverse("teaching:session", args=[session.session_id]))
+        mock_run.assert_not_called()
+
+
+class InquiryQuestionCacheTests(TestCase):
+    def setUp(self):
+        self.user = create_student("inquiry_cache_student")
+        self.session = TeachingSession.objects.create(
+            user=self.user,
+            phase=TeachingSession.Phase.PERSONAL_INQUIRY,
+            status=TeachingSession.Status.ONGOING,
+        )
+
+    @patch("teaching.concurrency._get_redis_client", return_value=None)
+    @patch("knowledge_base.rag.chains.generate_personal_inquiry")
+    def test_inquiry_question_is_generated_once_per_session(
+        self,
+        mock_generate,
+        _mock_redis,
+    ):
+        from knowledge_base.rag.schemas import PersonalInquiryResult
+        from teaching.services import generate_inquiry_question
+
+        mock_generate.return_value = PersonalInquiryResult(**MOCK_PERSONAL_INQUIRY)
+
+        first = generate_inquiry_question(self.session, self.user)
+        second = generate_inquiry_question(self.session, self.user)
+
+        self.assertEqual(first, second)
+        mock_generate.assert_called_once()
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.inquiry_data, MOCK_PERSONAL_INQUIRY)
+
+    @patch("teaching.concurrency._get_redis_client", return_value=None)
+    @patch(
+        "knowledge_base.rag.chains.generate_personal_inquiry",
+        side_effect=APIError("provider busy"),
+    )
+    def test_provider_failure_caches_fallback(self, mock_generate, _mock_redis):
+        from teaching.services import DEFAULT_INQUIRY_DATA, generate_inquiry_question
+
+        with self.assertRaises(APIError):
+            generate_inquiry_question(self.session, self.user)
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.inquiry_data, DEFAULT_INQUIRY_DATA)
+        self.assertEqual(
+            generate_inquiry_question(self.session, self.user),
+            DEFAULT_INQUIRY_DATA,
+        )
+        mock_generate.assert_called_once()
+
+
+class TeachingOperationLockTests(TestCase):
+    @patch("teaching.concurrency._get_redis_client")
+    def test_same_operation_cannot_be_acquired_twice(self, mock_client_factory):
+        from teaching.concurrency import session_operation_lock
+
+        client = MagicMock()
+        client.set.return_value = True
+        mock_client_factory.return_value = client
+
+        with session_operation_lock("session-lock-test", "plan") as first:
+            with session_operation_lock("session-lock-test", "plan") as second:
+                self.assertTrue(first)
+                self.assertFalse(second)
+
+        client.eval.assert_called_once()
+
+    @patch("teaching.concurrency._get_redis_client")
+    def test_redis_contention_returns_without_waiting(self, mock_client_factory):
+        from teaching.concurrency import session_operation_lock
+
+        client = MagicMock()
+        client.set.return_value = False
+        mock_client_factory.return_value = client
+
+        with session_operation_lock("session-redis-test", "plan") as acquired:
+            self.assertFalse(acquired)
+
 
 class SkillConfirmationTests(TestCase):
     """Test confirming the skill selection and generating the teaching plan."""
@@ -404,6 +498,39 @@ class SkillConfirmationTests(TestCase):
             self.assertRedirects(response, reverse("teaching:session", args=[self.session.session_id]))
             self.session.refresh_from_db()
             self.assertEqual(self.session.phase, TeachingSession.Phase.SKILL_SELECTION)
+
+    @patch("teaching.services.run_teaching_plan")
+    def test_confirm_skill_claims_processing_phase_before_generation(self, mock_run):
+        def complete_plan(session, _user):
+            session.refresh_from_db()
+            self.assertEqual(
+                session.phase,
+                TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING,
+            )
+            session.phase = TeachingSession.Phase.TEACHING
+            session.teaching_plan = MOCK_TEACHING_PLAN
+            session.save(update_fields=["phase", "teaching_plan"])
+
+        mock_run.side_effect = complete_plan
+        self.client.post(
+            reverse("teaching:confirm_skill", args=[self.session.session_id])
+        )
+        mock_run.assert_called_once()
+
+    @patch("teaching.services.run_teaching_plan")
+    def test_duplicate_confirm_skill_is_suppressed_while_processing(self, mock_run):
+        self.session.phase = TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING
+        self.session.save(update_fields=["phase"])
+
+        response = self.client.post(
+            reverse("teaching:confirm_skill", args=[self.session.session_id])
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("teaching:session", args=[self.session.session_id]),
+        )
+        mock_run.assert_not_called()
 
 
 # ═══════════════════════════════════════════════════════════

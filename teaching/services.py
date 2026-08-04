@@ -23,6 +23,12 @@ logger = logging.getLogger("dbt_platform.teaching")
 # unless the model provides an explicit, valid repeat justification.
 RECENT_SKILL_REPEAT_WINDOW = 3
 
+DEFAULT_INQUIRY_DATA = {
+    "greeting": "你好！在开始之前，我想先了解一下你的近况。",
+    "question": "最近一周，有什么事情让你感到开心或者有压力吗？愿意和我聊聊吗？",
+    "inquiry_focus": "近期状态",
+}
+
 # Fallback module lookup when switching to an alternative skill.
 _SKILL_MODULE_HINTS: dict[str, str] = {
     "观察呼吸": "正念",
@@ -131,30 +137,61 @@ def generate_inquiry_question(
     Returns a dict with greeting, question, and inquiry_focus.
     """
     from knowledge_base.rag.chains import generate_personal_inquiry
+    from knowledge_base.rag.llm_client import APIError, ConfigurationError
+    from .concurrency import session_operation_lock
 
-    profile = getattr(user, "profile", None)
+    cached = session.inquiry_data or {}
+    if cached:
+        return cached
 
-    # Read mood value from the session's pre-mood record
-    mood_value = 3
-    mood_note = ""
-    if session.pre_mood_id:
-        from mood.models import MoodRecord
+    with session_operation_lock(session.session_id, "inquiry-question") as acquired:
+        if not acquired:
+            # Another request is already generating and will persist the result.
+            # Return immediately so page refreshes cannot consume web threads.
+            logger.info(
+                "Duplicate inquiry generation suppressed for session %s",
+                session.session_id,
+            )
+            return dict(DEFAULT_INQUIRY_DATA)
+
+        session.refresh_from_db(fields=["inquiry_data"])
+        cached = session.inquiry_data or {}
+        if cached:
+            return cached
+
+        profile = getattr(user, "profile", None)
+
+        # Read mood value from the session's pre-mood record
+        mood_value = 3
+        mood_note = ""
+        if session.pre_mood_id:
+            from mood.models import MoodRecord
+            try:
+                mood = MoodRecord.objects.get(mood_id=session.pre_mood_id)
+                mood_value = mood.mood_value
+                mood_note = mood.note or ""
+            except MoodRecord.DoesNotExist:
+                pass
+
         try:
-            mood = MoodRecord.objects.get(mood_id=session.pre_mood_id)
-            mood_value = mood.mood_value
-            mood_note = mood.note or ""
-        except MoodRecord.DoesNotExist:
-            pass
+            result = generate_personal_inquiry(
+                profile=profile,
+                mood_value=mood_value,
+                mood_note=mood_note,
+            )
+        except (ConfigurationError, APIError):
+            # Cache the deterministic fallback so a provider outage cannot turn
+            # page refreshes into an external-API retry storm.
+            session.inquiry_data = dict(DEFAULT_INQUIRY_DATA)
+            session.save(update_fields=["inquiry_data"])
+            raise
 
-    result = generate_personal_inquiry(
-        profile=profile,
-        mood_value=mood_value,
-        mood_note=mood_note,
-    )
-
-    logger.info("Personal inquiry generated for session %s: focus=%s",
-                session.session_id, result.inquiry_focus)
-    return result.model_dump()
+        inquiry_data = result.model_dump()
+        session.inquiry_data = inquiry_data
+        session.save(update_fields=["inquiry_data"])
+        logger.info("Personal inquiry generated for session %s: focus=%s",
+                    session.session_id, result.inquiry_focus)
+        return inquiry_data
 
 
 def run_personal_inquiry(

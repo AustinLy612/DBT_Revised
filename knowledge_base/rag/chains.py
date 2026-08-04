@@ -3,12 +3,12 @@
 Each function in this module is a self-contained RAG pipeline:
   1. Retrieve relevant chunks from the knowledge base
   2. Format the prompt with student context and retrieved content
-  3. Call the LLM (DeepSeek) with the formatted prompt
+  3. Call the configured LLM with the formatted prompt
   4. Parse the JSON response through the Pydantic schema
   5. Return the validated structured output
 
 All functions accept either:
-- A real DeepSeek API call (when DEEPSEEK_API_KEY is set), or
+- A real Ark Agent Plan API call, or
 - A mock_llm_response parameter for testing without API access
 
 Error handling:

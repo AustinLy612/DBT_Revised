@@ -448,15 +448,16 @@ class PromptTemplateTests(TestCase):
 class LLMClientErrorTests(TestCase):
     def test_missing_api_key_raises_configuration_error(self):
         from .rag.llm_client import chat_completion
-        with patch("django.conf.settings.DEEPSEEK_API_KEY", ""):
-            with self.assertRaises(ConfigurationError):
-                chat_completion([{"role": "user", "content": "test"}])
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", ""):
+            with patch("django.conf.settings.ARK_API_KEY", ""):
+                with self.assertRaises(ConfigurationError):
+                    chat_completion([{"role": "user", "content": "test"}])
 
     def test_api_timeout_raises_api_error(self):
         import requests
         from .rag.llm_client import APIError, chat_completion
-        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
-            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("django.conf.settings.ARK_LLM_BASE_URL", "https://ark.example/api/plan/v3"):
                 mock_session = MagicMock()
                 mock_session.post.side_effect = requests.Timeout
                 with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
@@ -467,8 +468,8 @@ class LLMClientErrorTests(TestCase):
     def test_connection_error_raises_api_error(self):
         import requests
         from .rag.llm_client import APIError, chat_completion
-        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
-            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("django.conf.settings.ARK_LLM_BASE_URL", "https://ark.example/api/plan/v3"):
                 mock_session = MagicMock()
                 mock_session.post.side_effect = requests.ConnectionError("refused")
                 with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
@@ -482,8 +483,8 @@ class LLMClientErrorTests(TestCase):
         mock_resp.status_code = 401
         mock_resp.json.return_value = {"error": {"message": "Invalid API key"}}
         mock_resp.text = '{"error": {"message": "Invalid API key"}}'
-        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
-            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("django.conf.settings.ARK_LLM_BASE_URL", "https://ark.example/api/plan/v3"):
                 mock_session = MagicMock()
                 mock_session.post.return_value = mock_resp
                 with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
@@ -504,8 +505,8 @@ class LLMClientErrorTests(TestCase):
             }],
             "usage": {"total_tokens": 50},
         }
-        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
-            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("django.conf.settings.ARK_LLM_BASE_URL", "https://ark.example/api/plan/v3"):
                 mock_session = MagicMock()
                 mock_session.post.return_value = mock_resp
                 with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
@@ -515,19 +516,85 @@ class LLMClientErrorTests(TestCase):
                     self.assertEqual(result["role"], "assistant")
                     self.assertEqual(result["content"], "你好！")
                     self.assertEqual(result["finish_reason"], "stop")
+                    request = mock_session.post.call_args
+                    self.assertEqual(
+                        request.args[0],
+                        "https://ark.example/api/plan/v3/chat/completions",
+                    )
+                    self.assertEqual(
+                        request.kwargs["json"]["model"],
+                        "doubao-seed-2.1-turbo",
+                    )
+                    self.assertEqual(
+                        request.kwargs["json"]["thinking"],
+                        {"type": "disabled"},
+                    )
 
     def test_empty_choices_raises_api_error(self):
         from .rag.llm_client import APIError, chat_completion
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {"choices": []}
-        with patch("django.conf.settings.DEEPSEEK_API_KEY", "test-key"):
-            with patch("django.conf.settings.DEEPSEEK_BASE_URL", "https://api.deepseek.com"):
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("django.conf.settings.ARK_LLM_BASE_URL", "https://ark.example/api/plan/v3"):
                 mock_session = MagicMock()
                 mock_session.post.return_value = mock_resp
                 with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
                     with self.assertRaises(APIError):
                         chat_completion([{"role": "user", "content": "test"}])
+
+    def test_streaming_response_parsing(self):
+        from .rag.llm_client import chat_completion_stream
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"你"}}]}'.encode(),
+            'data: {"choices":[{"delta":{"content":"好"}}]}'.encode(),
+            b"data: [DONE]",
+        ]
+        mock_session = MagicMock()
+        mock_session.post.return_value = mock_resp
+
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
+                chunks = list(
+                    chat_completion_stream([{"role": "user", "content": "你好"}])
+                )
+
+        self.assertEqual(chunks, ["你", "好", "[STREAM_DONE]", "你好"])
+        self.assertEqual(
+            mock_session.post.call_args.kwargs["json"]["thinking"],
+            {"type": "disabled"},
+        )
+
+    def test_streaming_transient_error_retries(self):
+        from .rag.llm_client import chat_completion_stream
+
+        busy_resp = MagicMock()
+        busy_resp.status_code = 503
+        busy_resp.json.return_value = {"error": {"message": "busy"}}
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.iter_lines.return_value = [
+            'data: {"choices":[{"delta":{"content":"OK"}}]}',
+            "data: [DONE]",
+        ]
+        mock_session = MagicMock()
+        mock_session.post.side_effect = [busy_resp, ok_resp]
+
+        with patch("django.conf.settings.ARK_AGENT_PLAN_API_KEY", "test-key"):
+            with patch("knowledge_base.rag.llm_client._get_session", return_value=mock_session):
+                with patch("knowledge_base.rag.llm_client.time.sleep"):
+                    chunks = list(
+                        chat_completion_stream(
+                            [{"role": "user", "content": "test"}]
+                        )
+                    )
+
+        self.assertEqual(chunks[-1], "OK")
+        self.assertEqual(mock_session.post.call_count, 2)
+        busy_resp.close.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════

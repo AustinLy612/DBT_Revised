@@ -147,6 +147,9 @@ REDIS_DB = env.int("REDIS_DB", default=0)
 REDIS_PASSWORD = env("REDIS_PASSWORD", default="")
 _REDIS_PASS_PART = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
 REDIS_URL = f"redis://{_REDIS_PASS_PART}{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+TEACHING_OPERATION_LOCK_TTL_SECONDS = env.int(
+    "TEACHING_OPERATION_LOCK_TTL_SECONDS", default=600
+)
 
 # ── Celery ──
 CELERY_BROKER_URL = env("CELERY_BROKER_URL", default=REDIS_URL)
@@ -204,7 +207,16 @@ QDRANT_HOST = env("QDRANT_HOST", default="localhost")
 QDRANT_PORT = env.int("QDRANT_PORT", default=6333)
 QDRANT_COLLECTION = env("QDRANT_COLLECTION", default="dbt_knowledge")
 
-# ── DeepSeek API (LLM) ──
+# ── Text LLM via Volcengine Ark Agent Plan ──
+# Shares the Agent Plan key used by Seedream image generation.
+ARK_LLM_BASE_URL = env(
+    "ARK_LLM_BASE_URL",
+    default="https://ark.cn-beijing.volces.com/api/plan/v3",
+)
+ARK_LLM_MODEL = env("ARK_LLM_MODEL", default="doubao-seed-2.1-turbo")
+ARK_LLM_THINKING = env("ARK_LLM_THINKING", default="disabled")
+
+# Deprecated — retained temporarily so existing environments can roll back.
 DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY", default="")
 DEEPSEEK_BASE_URL = env("DEEPSEEK_BASE_URL", default="https://api.deepseek.com")
 

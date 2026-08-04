@@ -13,7 +13,7 @@
 | Phase | 场景 | 主要压力点 |
 |-------|------|------------|
 | D | 15 路同时教学 SSE | Gunicorn gthread 长连接（3 workers × 8 threads） |
-| E | 5 SSE + 5 TTS + 5 浏览 | 外部 API（DeepSeek、火山 TTS）+ 短请求 |
+| E | 5 SSE + 5 TTS + 5 浏览 | 外部 API（方舟豆包、火山 TTS）+ 短请求 |
 | F1/F2 | 5 / 10 路同时场景配图 | `interactive-images` 队列 + Seedream API |
 | G | 15 人同时 POST 开始测试 | `questions` 队列 RAG 出题（embedding + LLM） |
 

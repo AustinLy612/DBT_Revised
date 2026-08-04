@@ -17,6 +17,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from . import services
+from .concurrency import session_operation_lock
 from .models import ChatMessage, TeachingSession
 from knowledge_base.rag.llm_client import APIError, ConfigurationError
 from questionnaire.decorators import profile_required
@@ -67,11 +68,7 @@ def session_view(request: HttpRequest, session_id: str) -> HttpResponse:
         except (ConfigurationError, APIError) as exc:
             logger.error("Inquiry question generation failed for session %s: %s",
                          session.session_id, exc)
-            inquiry_data = {
-                "greeting": "你好！在开始之前，我想先了解一下你的近况。",
-                "question": "最近一周，有什么事情让你感到开心或者有压力吗？愿意和我聊聊吗？",
-                "inquiry_focus": "近期状态",
-            }
+            inquiry_data = dict(services.DEFAULT_INQUIRY_DATA)
 
     # Generate AI opening message when first entering the teaching phase
     if not is_terminal and session.phase == TeachingSession.Phase.TEACHING and not conversation:
@@ -117,13 +114,21 @@ def record_pre_mood_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
     # Allow retry from info_collection phase (error recovery)
     if session.phase == TeachingSession.Phase.INFO_COLLECTION:
-        try:
-            services.run_info_collection(session, request.user)
-        except (ConfigurationError, APIError) as exc:
-            logger.error("Info collection / skill selection failed for session %s: %s",
-                         session.session_id, exc)
-            messages.error(request, "AI 技能推荐暂时不可用，请稍后再试。")
-            return redirect("teaching:session", session_id=session_id)
+        with session_operation_lock(session.session_id, "skill-selection") as acquired:
+            if not acquired:
+                messages.info(request, "AI 正在生成技能推荐，请勿重复提交。")
+                return redirect("teaching:session", session_id=session_id)
+
+            session.refresh_from_db()
+            if session.phase != TeachingSession.Phase.INFO_COLLECTION:
+                return redirect("teaching:session", session_id=session_id)
+            try:
+                services.run_info_collection(session, request.user)
+            except (ConfigurationError, APIError) as exc:
+                logger.error("Info collection / skill selection failed for session %s: %s",
+                             session.session_id, exc)
+                messages.error(request, "AI 技能推荐暂时不可用，请稍后再试。")
+                return redirect("teaching:session", session_id=session_id)
         messages.success(request, f"AI 已推荐技能「{session.selected_skill}」，请确认或修改。")
         return redirect("teaching:session", session_id=session_id)
 
@@ -161,6 +166,9 @@ def personal_inquiry_view(request: HttpRequest, session_id: str) -> HttpResponse
 
     session = services.get_session_or_404(session_id, request.user)
 
+    if session.phase == TeachingSession.Phase.INFO_COLLECTION:
+        messages.info(request, "AI 正在生成技能推荐，请勿重复提交。")
+        return redirect("teaching:session", session_id=session_id)
     if session.phase != TeachingSession.Phase.PERSONAL_INQUIRY:
         messages.warning(request, "当前不在个人情况了解阶段。")
         return redirect("teaching:session", session_id=session_id)
@@ -170,6 +178,20 @@ def personal_inquiry_view(request: HttpRequest, session_id: str) -> HttpResponse
         messages.warning(request, "请分享一些你最近的经历或感受。")
         return redirect("teaching:session", session_id=session_id)
 
+    claimed = TeachingSession.objects.filter(
+        session_id=session.session_id,
+        user=request.user,
+        phase=TeachingSession.Phase.PERSONAL_INQUIRY,
+    ).update(
+        personal_context=personal_context,
+        phase=TeachingSession.Phase.INFO_COLLECTION,
+    )
+    if not claimed:
+        messages.info(request, "AI 正在生成技能推荐，请勿重复提交。")
+        return redirect("teaching:session", session_id=session_id)
+
+    session.personal_context = personal_context
+    session.phase = TeachingSession.Phase.INFO_COLLECTION
     try:
         services.run_personal_inquiry(session, request.user, personal_context)
     except (ConfigurationError, APIError) as exc:
@@ -196,21 +218,48 @@ def confirm_skill_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
     session = services.get_session_or_404(session_id, request.user)
 
+    if session.phase == TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING:
+        messages.info(request, "教学计划正在生成，请勿重复提交。")
+        return redirect("teaching:session", session_id=session_id)
     if session.phase != TeachingSession.Phase.SKILL_SELECTION:
         messages.warning(request, "当前不在技能选择阶段。")
         return redirect("teaching:session", session_id=session_id)
 
     custom_skill = request.POST.get("custom_skill", "").strip()
+    updates = {"phase": TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING}
+    if custom_skill:
+        updates["selected_skill"] = custom_skill
+
+    claimed = TeachingSession.objects.filter(
+        session_id=session.session_id,
+        user=request.user,
+        phase=TeachingSession.Phase.SKILL_SELECTION,
+    ).update(**updates)
+    if not claimed:
+        messages.info(request, "教学计划正在生成，请勿重复提交。")
+        return redirect("teaching:session", session_id=session_id)
+
+    session.phase = TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING
     if custom_skill:
         session.selected_skill = custom_skill
-        session.save(update_fields=["selected_skill"])
 
     try:
         services.run_teaching_plan(session, request.user)
     except (ConfigurationError, APIError) as exc:
+        TeachingSession.objects.filter(
+            session_id=session.session_id,
+            phase=TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING,
+        ).update(phase=TeachingSession.Phase.SKILL_SELECTION)
         logger.error("Teaching plan generation failed for session %s: %s", session.session_id, exc)
         messages.error(request, "教学计划生成暂时不可用，请稍后再试。")
         return redirect("teaching:session", session_id=session_id)
+    except Exception:
+        TeachingSession.objects.filter(
+            session_id=session.session_id,
+            phase=TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING,
+        ).update(phase=TeachingSession.Phase.SKILL_SELECTION)
+        logger.exception("Unexpected teaching plan failure for session %s", session.session_id)
+        raise
 
     messages.success(request, f"教学计划已生成，开始学习「{session.selected_skill}」。")
     return redirect("teaching:session", session_id=session_id)

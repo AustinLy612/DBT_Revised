@@ -33,6 +33,7 @@ class TeachingSession(models.Model):
     teaching_plan = models.JSONField(default=dict)
     rag_context_ids = models.JSONField(default=list)
     teaching_summary = models.TextField(blank=True, default="")
+    inquiry_data = models.JSONField(default=dict)
     phase = models.CharField(
         max_length=30, choices=Phase.choices, default=Phase.PRE_MOOD_RECORDING
     )

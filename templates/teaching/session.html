@@ -293,18 +293,16 @@
         </div>
 
     {% elif session.phase == 'rag_retrieval_for_teaching' %}
-        {# ── RAG Retrieval Phase (auto-transition, shown briefly) ── #}
+        {# ── RAG Retrieval Phase (another request owns plan generation) ── #}
         <div class="bg-white border rounded-lg p-6 text-center">
             <h2 class="text-lg font-semibold text-gray-800 mb-2">正在准备教学资料</h2>
-            <p class="text-sm text-gray-500 mb-4">正在检索「{{ session.selected_skill }}」相关的知识内容...</p>
+            <p class="text-sm text-gray-500 mb-4">正在为「{{ session.selected_skill }}」生成教学计划，请勿重复提交。</p>
             <div class="animate-pulse text-blue-500 text-sm">检索中...</div>
-            <form method="post" action="{% url 'teaching:confirm_skill' session.session_id %}">
-                {% csrf_token %}
-                <button type="submit" class="mt-4 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">
-                    继续
-                </button>
-            </form>
+            <p class="mt-3 text-xs text-gray-400">页面将在几秒后自动刷新。</p>
         </div>
+        <script>
+            window.setTimeout(function () { window.location.reload(); }, 3000);
+        </script>
 
     {% elif session.phase == 'teaching' %}
         {# ── Teaching Phase ── #}

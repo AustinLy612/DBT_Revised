@@ -729,7 +729,7 @@ def phase_b_mixed_peak(base_url: str, users: list[dict], verify_ssl: bool) -> Ph
         "Phase B — 峰值混合 (7浏览+5教学SSE+2轮询+1报告)",
         results,
         time.perf_counter() - t0,
-        "5 路真实 DeepSeek SSE + 7 路浏览；最接近课间同时使用峰值",
+        "5 路真实方舟豆包 SSE + 7 路浏览；最接近课间同时使用峰值",
         extra={
             "sse_requests": sum(1 for r in results if r.label == "teaching_sse"),
             "sse_ok": sum(1 for r in results if r.label == "teaching_sse" and r.ok),
@@ -841,7 +841,7 @@ def phase_e_voice_mixed(base_url: str, users: list[dict], verify_ssl: bool) -> P
         "Phase E — 5 SSE + 5 TTS + 5 浏览",
         results,
         time.perf_counter() - t0,
-        "barrier 同步后混合长 I/O：DeepSeek SSE + 火山 TTS + 轻量页面浏览",
+        "barrier 同步后混合长 I/O：方舟豆包 SSE + 火山 TTS + 轻量页面浏览",
         extra={
             "sse_ok": sum(1 for r in sse if r.ok),
             "sse_latencies_ms": [round(r.elapsed_ms, 1) for r in sse],
