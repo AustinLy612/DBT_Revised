@@ -283,6 +283,35 @@ class ExportServiceTests(TestCase):
         self.assertIn("risk_events", data)
         self.assertIn("achievements", data)
 
+    def test_export_timestamps_use_shanghai_timezone(self):
+        from datetime import datetime, timezone as dt_timezone
+        from zoneinfo import ZoneInfo
+
+        from export_app.services import format_datetime_shanghai, is_excluded_test_username
+        from mood.models import MoodRecord
+        from export_app.services import aggregate_user_data
+
+        utc_dt = datetime(2026, 8, 15, 4, 0, 0, tzinfo=dt_timezone.utc)
+        shanghai = format_datetime_shanghai(utc_dt)
+        self.assertTrue(shanghai.endswith("+08:00"), shanghai)
+        self.assertEqual(
+            datetime.fromisoformat(shanghai),
+            datetime(2026, 8, 15, 12, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+
+        student = create_student("tz_student")
+        MoodRecord.objects.create(
+            user=student, mood_value=3, emoji="😐", context="manual", note=""
+        )
+        # Force a known UTC instant on the stored record if the backend allows update.
+        mood = MoodRecord.objects.get(user=student)
+        MoodRecord.objects.filter(pk=mood.pk).update(created_at=utc_dt)
+        data = aggregate_user_data(student)
+        self.assertTrue(data["mood_records"][0]["created_at"].endswith("+08:00"))
+        self.assertTrue(is_excluded_test_username("loadtest15_01"))
+        self.assertTrue(is_excluded_test_username("test01"))
+        self.assertFalse(is_excluded_test_username("01yj"))
+
     def test_export_user_json_returns_string(self):
         student = create_student("json_svc_student")
         from export_app.services import export_user_json

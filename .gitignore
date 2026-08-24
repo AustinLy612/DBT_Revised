@@ -46,3 +46,7 @@ Thumbs.db
 
 # Temp
 /tmp/
+
+# Experiment data exports (may contain PII)
+/data_export.zip
+/data_export/
