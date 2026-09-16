@@ -23,6 +23,34 @@ logger = logging.getLogger("dbt_platform.teaching")
 # unless the model provides an explicit, valid repeat justification.
 RECENT_SKILL_REPEAT_WINDOW = 3
 
+
+def llm_routing_kwargs(session: models.Model) -> dict[str, Any]:
+    """Return provider routing that persists overload fallback on this session."""
+    provider = (
+        getattr(session, "llm_provider", None)
+        or session.LLMProvider.DEEPSEEK
+    )
+
+    def persist_fallback(new_provider: str, error: Exception) -> None:
+        from .models import TeachingSession
+
+        TeachingSession.objects.filter(
+            session_id=session.session_id,
+            llm_provider=TeachingSession.LLMProvider.DEEPSEEK,
+        ).update(llm_provider=new_provider)
+        session.llm_provider = new_provider
+        logger.warning(
+            "Session %s switched from DeepSeek to Doubao after load error: %s",
+            session.session_id,
+            error,
+        )
+
+    return {
+        "provider": provider,
+        "on_provider_fallback": persist_fallback,
+    }
+
+
 DEFAULT_INQUIRY_DATA = {
     "greeting": "你好！在开始之前，我想先了解一下你的近况。",
     "question": "最近一周，有什么事情让你感到开心或者有压力吗？愿意和我聊聊吗？",
@@ -178,6 +206,7 @@ def generate_inquiry_question(
                 profile=profile,
                 mood_value=mood_value,
                 mood_note=mood_note,
+                **llm_routing_kwargs(session),
             )
         except (ConfigurationError, APIError):
             # Cache the deterministic fallback so a provider outage cannot turn
@@ -519,6 +548,7 @@ def _run_skill_selection_inner(
         retrieval_query=retrieval_query,
         personal_context=session.personal_context or "",
         mood_value=mood_value,
+        **llm_routing_kwargs(session),
     )
 
     result = _apply_repeat_guard(result, recent_avoid_skills, failed_skills)
@@ -622,6 +652,7 @@ def run_teaching_plan(session: models.Model, user: models.Model) -> dict[str, An
         selected_skill=session.selected_skill,
         selected_module=session.selected_module,
         retriever=retriever,
+        **llm_routing_kwargs(session),
     )
 
     plan_dict = result.model_dump()
@@ -682,6 +713,7 @@ def _generate_opening_message(
         personal_context=session.personal_context or "",
         teaching_plan_steps=plan_steps,
         retriever=retriever,
+        **llm_routing_kwargs(session),
     )
 
     content_dict = result.model_dump()
@@ -763,6 +795,7 @@ def generate_teaching_response(
         retriever=retriever,
         include_risk_assessment=include_risk_assessment,
         prefetched_chunks=prefetched_chunks,
+        **llm_routing_kwargs(session),
     )
 
     content_dict = result.model_dump()
@@ -828,6 +861,7 @@ def generate_session_summary(
         skill=session.selected_skill,
         conversation_history=conversation_history,
         retriever=retriever,
+        **llm_routing_kwargs(session),
     )
 
     summary_dict = result.model_dump()

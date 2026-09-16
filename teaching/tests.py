@@ -225,6 +225,27 @@ class SessionCreationTests(TestCase):
         session = TeachingSession.objects.first()
         self.assertEqual(session.phase, TeachingSession.Phase.PRE_MOOD_RECORDING)
         self.assertEqual(session.status, TeachingSession.Status.ONGOING)
+        self.assertEqual(
+            session.llm_provider,
+            TeachingSession.LLMProvider.DEEPSEEK,
+        )
+
+    def test_overload_fallback_is_persisted_for_same_session(self):
+        from teaching.services import llm_routing_kwargs
+
+        session = TeachingSession.objects.create(user=self.user)
+        routing = llm_routing_kwargs(session)
+        routing["on_provider_fallback"]("doubao", APIError("503 overloaded"))
+
+        session.refresh_from_db()
+        self.assertEqual(
+            session.llm_provider,
+            TeachingSession.LLMProvider.DOUBAO,
+        )
+        self.assertEqual(
+            llm_routing_kwargs(session)["provider"],
+            TeachingSession.LLMProvider.DOUBAO,
+        )
 
     def test_pre_mood_advances_to_personal_inquiry(self):
         """After pre-mood recording, phase advances to personal_inquiry (not skill_selection)."""

@@ -63,6 +63,7 @@ def aggregate_user_data(user):
                 "teaching_summary": s.teaching_summary,
                 "phase": s.phase,
                 "status": s.status,
+                "llm_provider": s.llm_provider,
                 "started_at": format_datetime_shanghai(s.started_at),
                 "completed_at": format_datetime_shanghai(s.completed_at),
                 "messages": messages,
@@ -235,7 +236,17 @@ def export_user_csv(user):
     # Teaching sessions
     writer.writerow(["=== 教学会话 ==="])
     writer.writerow(
-        ["会话ID", "技能", "模块", "状态", "阶段", "开始时间", "完成时间", "教学摘要"]
+        [
+            "会话ID",
+            "技能",
+            "模块",
+            "状态",
+            "阶段",
+            "LLM提供方",
+            "开始时间",
+            "完成时间",
+            "教学摘要",
+        ]
     )
     for s in data["teaching_sessions"]:
         writer.writerow(
@@ -245,6 +256,7 @@ def export_user_csv(user):
                 s["selected_module"],
                 s["status"],
                 s["phase"],
+                s["llm_provider"],
                 s["started_at"],
                 s["completed_at"],
                 s["teaching_summary"],

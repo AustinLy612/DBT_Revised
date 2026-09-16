@@ -18,6 +18,10 @@ class TeachingSession(models.Model):
         RAG_RETRIEVAL_FOR_TEACHING = "rag_retrieval_for_teaching", "RAG教学检索"
         TEACHING = "teaching", "教学中"
 
+    class LLMProvider(models.TextChoices):
+        DEEPSEEK = "deepseek", "DeepSeek Flash"
+        DOUBAO = "doubao", "豆包（负载兜底）"
+
     session_id = models.CharField(
         primary_key=True,
         max_length=36,
@@ -43,6 +47,11 @@ class TeachingSession(models.Model):
     pre_mood_id = models.CharField(max_length=36, blank=True, default="")
     post_mood_id = models.CharField(max_length=36, blank=True, default="")
     personal_context = models.TextField(blank=True, default="")
+    llm_provider = models.CharField(
+        max_length=16,
+        choices=LLMProvider.choices,
+        default=LLMProvider.DEEPSEEK,
+    )
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 

@@ -61,6 +61,7 @@ def generate_and_save_questions(
     from .models import TestQuestion
     from knowledge_base.rag.chains import generate_test_questions
     from knowledge_base.rag.retriever import get_retriever
+    from teaching.services import llm_routing_kwargs
 
     profile = getattr(user, "profile", None)
 
@@ -96,6 +97,7 @@ def generate_and_save_questions(
         previous_tests_correct_rates=previous_rates if previous_rates else None,
         retriever=retriever,
         retrieval_query=retrieval_query,
+        **llm_routing_kwargs(session),
     )
 
     questions_data = result.model_dump()

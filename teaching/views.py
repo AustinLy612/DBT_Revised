@@ -578,6 +578,7 @@ def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
                 student_message=student_text,
                 retriever=retriever,
                 prefetched_chunks=prefetched_chunks,
+                **services.llm_routing_kwargs(session),
             )
 
             for event in stream:

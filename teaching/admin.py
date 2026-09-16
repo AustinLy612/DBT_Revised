@@ -28,17 +28,31 @@ class TeachingSessionAdmin(admin.ModelAdmin):
         "user",
         "phase",
         "status",
+        "llm_provider",
         "selected_module",
         "selected_skill",
         "message_count",
         "started_at",
         "completed_at",
     ]
-    list_filter = ["status", "phase", "selected_module", "started_at"]
+    list_filter = ["status", "phase", "llm_provider", "selected_module", "started_at"]
     search_fields = ["user__username", "selected_module", "selected_skill", "teaching_summary"]
-    readonly_fields = ["session_id", "started_at", "completed_at"]
+    readonly_fields = ["session_id", "llm_provider", "started_at", "completed_at"]
     fieldsets = (
-        (_("基本信息"), {"fields": ("session_id", "user", "phase", "status", "started_at", "completed_at")}),
+        (
+            _("基本信息"),
+            {
+                "fields": (
+                    "session_id",
+                    "user",
+                    "phase",
+                    "status",
+                    "llm_provider",
+                    "started_at",
+                    "completed_at",
+                )
+            },
+        ),
         (_("教学内容"), {"fields": ("selected_module", "selected_skill", "selection_reason", "teaching_summary", "teaching_plan")}),
         (_("RAG上下文"), {"fields": ("rag_context_ids",)}),
         (_("情绪记录"), {"fields": ("pre_mood_id", "post_mood_id")}),

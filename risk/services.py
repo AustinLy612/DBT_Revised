@@ -150,6 +150,7 @@ def process_risk_check(
 
     from knowledge_base.rag.chains import run_risk_assessment
     from knowledge_base.rag.llm_client import APIError
+    from teaching.services import llm_routing_kwargs
 
     ai_available = True
     try:
@@ -157,6 +158,7 @@ def process_risk_check(
             user_message=text,
             recent_context=recent_context,
             triggered_keywords=keywords,
+            **llm_routing_kwargs(session),
         )
     except APIError as exc:
         logger.error("AI risk assessment failed, falling back to keyword-only: %s", exc)
@@ -224,6 +226,7 @@ def process_test_risk_check(
 
     from knowledge_base.rag.chains import run_risk_assessment
     from knowledge_base.rag.llm_client import APIError
+    from teaching.services import llm_routing_kwargs
 
     ai_available = True
     try:
@@ -231,6 +234,7 @@ def process_test_risk_check(
             user_message=text,
             recent_context=recent_answers,
             triggered_keywords=keywords,
+            **llm_routing_kwargs(test.session),
         )
     except APIError as exc:
         logger.error("AI risk assessment failed in testing, falling back to keyword-only: %s", exc)

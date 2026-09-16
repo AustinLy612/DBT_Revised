@@ -26,6 +26,7 @@ from typing import Any
 from .llm_client import (
     APIError,
     ConfigurationError,
+    FallbackCallback,
     chat_completion,
 )
 from .prompts import (
@@ -56,6 +57,9 @@ def _call_llm_or_mock(
     messages: list[dict[str, str]],
     schema_model: type,
     mock_llm_response: dict[str, Any] | None = None,
+    *,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> dict[str, Any]:
     """Call the LLM or return a mock response for testing.
 
@@ -79,6 +83,8 @@ def _call_llm_or_mock(
         messages,
         temperature=0.3,
         response_format={"type": "json_object"},
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
     )
 
     content = raw_result["content"]
@@ -110,6 +116,8 @@ def generate_personal_inquiry(
     mood_value: int = 3,
     mood_note: str = "",
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> PersonalInquiryResult:
     """Generate a warm, empathetic question to understand the student's recent situation.
 
@@ -124,7 +132,13 @@ def generate_personal_inquiry(
         mood_note=mood_note,
     )
 
-    result = _call_llm_or_mock(messages, PersonalInquiryResult, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        PersonalInquiryResult,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return PersonalInquiryResult(**result)
 
 
@@ -142,6 +156,8 @@ def generate_skill_selection(
     personal_context: str = "",
     mood_value: int | None = None,
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> SkillSelectionResult:
     """Generate a skill recommendation for a student.
 
@@ -167,7 +183,13 @@ def generate_skill_selection(
         mood_value=mood_value,
     )
 
-    result = _call_llm_or_mock(messages, SkillSelectionResult, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        SkillSelectionResult,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return SkillSelectionResult(**result)
 
 
@@ -181,6 +203,8 @@ def generate_teaching_plan(
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> TeachingPlan:
     """Generate a structured teaching plan for a session.
 
@@ -203,7 +227,13 @@ def generate_teaching_plan(
         retrieval_chunks=chunks,
     )
 
-    result = _call_llm_or_mock(messages, TeachingPlan, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        TeachingPlan,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return TeachingPlan(**result)
 
 
@@ -220,6 +250,8 @@ def generate_teaching_opening(
     teaching_plan_steps: list[Any] | None = None,
     retriever: DBTRetriever | None = None,
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> TeachingContent:
     """Generate the AI's opening message when the teaching phase begins.
 
@@ -248,7 +280,13 @@ def generate_teaching_opening(
         retrieval_chunks=chunks,
     )
 
-    result = _call_llm_or_mock(messages, TeachingContent, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        TeachingContent,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return TeachingContent(**result)
 
 
@@ -267,6 +305,8 @@ def generate_teaching_content(
     include_risk_assessment: bool = False,
     prefetched_chunks: list[dict[str, Any]] | None = None,
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> TeachingContent:
     """Generate a single teaching message during a session.
 
@@ -305,7 +345,13 @@ def generate_teaching_content(
         include_risk_assessment=include_risk_assessment,
     )
 
-    result = _call_llm_or_mock(messages, TeachingContent, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        TeachingContent,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return TeachingContent(**result)
 
 
@@ -327,6 +373,8 @@ def stream_teaching_content(
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
     prefetched_chunks: list[dict[str, Any]] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ):
     """Stream teaching content generation, yielding SSE-style events.
 
@@ -369,7 +417,11 @@ def stream_teaching_content(
     )
 
     try:
-        stream = chat_completion_stream(messages)
+        stream = chat_completion_stream(
+            messages,
+            provider=provider,
+            on_provider_fallback=on_provider_fallback,
+        )
     except (ConfigurationError, APIError) as exc:
         yield {"type": "error", "message": str(exc)}
         return
@@ -432,6 +484,8 @@ def generate_teaching_summary(
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> TeachingSummary:
     """Generate a teaching summary after a session ends.
 
@@ -454,7 +508,13 @@ def generate_teaching_summary(
         retrieval_chunks=chunks,
     )
 
-    result = _call_llm_or_mock(messages, TeachingSummary, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        TeachingSummary,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return TeachingSummary(**result)
 
 
@@ -470,6 +530,8 @@ def generate_test_questions(
     retriever: DBTRetriever | None = None,
     retrieval_query: str = "",
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> TestQuestions:
     """Generate 5 test questions for a completed teaching session.
 
@@ -494,7 +556,13 @@ def generate_test_questions(
         retrieval_chunks=chunks,
     )
 
-    result = _call_llm_or_mock(messages, TestQuestions, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        TestQuestions,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return TestQuestions(**result)
 
 
@@ -506,6 +574,8 @@ def run_risk_assessment(
     recent_context: list[dict[str, str]] | None = None,
     triggered_keywords: list[str] | None = None,
     mock_llm_response: dict[str, Any] | None = None,
+    provider: str | None = None,
+    on_provider_fallback: FallbackCallback | None = None,
 ) -> RiskAssessment:
     """Evaluate a user message for potential risk.
 
@@ -519,5 +589,11 @@ def run_risk_assessment(
         triggered_keywords=triggered_keywords,
     )
 
-    result = _call_llm_or_mock(messages, RiskAssessment, mock_llm_response)
+    result = _call_llm_or_mock(
+        messages,
+        RiskAssessment,
+        mock_llm_response,
+        provider=provider,
+        on_provider_fallback=on_provider_fallback,
+    )
     return RiskAssessment(**result)

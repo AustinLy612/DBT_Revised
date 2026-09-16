@@ -207,18 +207,19 @@ QDRANT_HOST = env("QDRANT_HOST", default="localhost")
 QDRANT_PORT = env.int("QDRANT_PORT", default=6333)
 QDRANT_COLLECTION = env("QDRANT_COLLECTION", default="dbt_knowledge")
 
-# ── Text LLM via Volcengine Ark Agent Plan ──
-# Shares the Agent Plan key used by Seedream image generation.
+# ── Text LLM routing ──
+# DeepSeek V4 Flash is the default. Ark Doubao is the per-session fallback
+# only when DeepSeek remains overloaded/rate-limited after retries.
+DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY", default="")
+DEEPSEEK_BASE_URL = env("DEEPSEEK_BASE_URL", default="https://api.deepseek.com")
+DEEPSEEK_MODEL = env("DEEPSEEK_MODEL", default="deepseek-v4-flash")
+
 ARK_LLM_BASE_URL = env(
     "ARK_LLM_BASE_URL",
     default="https://ark.cn-beijing.volces.com/api/plan/v3",
 )
 ARK_LLM_MODEL = env("ARK_LLM_MODEL", default="doubao-seed-2.1-turbo")
 ARK_LLM_THINKING = env("ARK_LLM_THINKING", default="disabled")
-
-# Deprecated — retained temporarily so existing environments can roll back.
-DEEPSEEK_API_KEY = env("DEEPSEEK_API_KEY", default="")
-DEEPSEEK_BASE_URL = env("DEEPSEEK_BASE_URL", default="https://api.deepseek.com")
 
 # ── MiniMax (deprecated — kept for backward compatibility) ──
 MINIMAX_API_KEY = env("MINIMAX_API_KEY", default="")
