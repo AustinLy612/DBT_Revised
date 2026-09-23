@@ -49,6 +49,14 @@ INSTALLED_APPS = [
     "ema_log",
 ]
 
+# Django's stock contrib migrations use integer primary keys. MongoDB needs
+# ObjectId migrations for these apps as well as custom AppConfigs above.
+MIGRATION_MODULES = {
+    "admin": "mongo_migrations.admin",
+    "auth": "mongo_migrations.auth",
+    "contenttypes": "mongo_migrations.contenttypes",
+}
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
