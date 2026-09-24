@@ -8,12 +8,15 @@ Implements the full teaching state machine:
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from datetime import datetime
 from typing import Any
 
 from django.db import models
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils import translation
+from django.utils.translation import gettext as _
 
 from risk.services import check_keyword_risk  # noqa: F401 — re-exported for callers
 
@@ -56,6 +59,10 @@ DEFAULT_INQUIRY_DATA = {
     "question": "最近一周，有什么事情让你感到开心或者有压力吗？愿意和我聊聊吗？",
     "inquiry_focus": "近期状态",
 }
+
+
+def _default_inquiry_data() -> dict[str, str]:
+    return {key: _(value) for key, value in DEFAULT_INQUIRY_DATA.items()}
 
 # Fallback module lookup when switching to an alternative skill.
 _SKILL_MODULE_HINTS: dict[str, str] = {
@@ -180,7 +187,7 @@ def generate_inquiry_question(
                 "Duplicate inquiry generation suppressed for session %s",
                 session.session_id,
             )
-            return dict(DEFAULT_INQUIRY_DATA)
+            return _default_inquiry_data()
 
         session.refresh_from_db(fields=["inquiry_data"])
         cached = session.inquiry_data or {}
@@ -211,7 +218,7 @@ def generate_inquiry_question(
         except (ConfigurationError, APIError):
             # Cache the deterministic fallback so a provider outage cannot turn
             # page refreshes into an external-API retry storm.
-            session.inquiry_data = dict(DEFAULT_INQUIRY_DATA)
+            session.inquiry_data = _default_inquiry_data()
             session.save(update_fields=["inquiry_data"])
             raise
 
@@ -264,8 +271,17 @@ def _session_counts_as_taught(session: models.Model) -> bool:
     return False
 
 
+@lru_cache(maxsize=1)
+def _skill_aliases() -> dict[str, str]:
+    aliases = {name.casefold(): name for name in _SKILL_MODULE_HINTS}
+    with translation.override("en"):
+        aliases.update({_(name).casefold(): name for name in _SKILL_MODULE_HINTS})
+    return aliases
+
+
 def _normalize_skill_name(skill: str) -> str:
-    return (skill or "").strip()
+    name = (skill or "").strip()
+    return _skill_aliases().get(name.casefold(), name)
 
 
 def _collect_selection_context(
@@ -361,11 +377,14 @@ def _apply_repeat_guard(
     has_valid_exception = is_repeat and bool(justification)
     if not has_valid_exception and selected in failed_set:
         reason = (getattr(result, "reason", "") or "")
-        if any(token in reason for token in ("未通过", "薄弱", "巩固", "复训", "未掌握")):
+        if any(token in reason.casefold() for token in (
+            "未通过", "薄弱", "巩固", "复训", "未掌握",
+            "failed", "not mastered", "needs practice", "repeat", "reinforce",
+        )):
             result.is_repeat = True
             if not justification:
                 result.repeat_justification = (
-                    f"该技能「{selected}」历史测试未掌握，需要巩固。"
+                    _("该技能「%(skill)s」历史测试未掌握，需要巩固。") % {"skill": _(selected)}
                 )
             has_valid_exception = True
 
@@ -393,25 +412,24 @@ def _apply_repeat_guard(
         result.is_repeat = True
         result.repeat_justification = (
             result.repeat_justification
-            or "模型推荐了近期已学技能但未给出有效复训理由，且无可用备选。"
+            or _("模型推荐了近期已学技能但未给出有效复训理由，且无可用备选。")
         )
         return result
 
     fallback = alternatives[0]
     original = selected
-    result.selected_skill = fallback
+    result.selected_skill = _(fallback)
     hinted_module = _SKILL_MODULE_HINTS.get(fallback)
     if hinted_module:
-        result.selected_module = hinted_module
+        result.selected_module = _(hinted_module)
     result.is_repeat = False
     result.repeat_justification = ""
-    note = (
-        f"原推荐「{original}」属于近期已学技能且缺少有效复训理由，"
-        f"已回退为未学备选「{fallback}」。"
-    )
+    note = _("原推荐「%(original)s」属于近期已学技能且缺少有效复训理由，已回退为未学备选「%(fallback)s」。") % {
+        "original": _(original), "fallback": _(fallback),
+    }
     existing_reason = (getattr(result, "reason", "") or "").strip()
     result.reason = f"{note} {existing_reason}".strip()
-    result.alternative_skills = [s for s in alternatives[1:] if s != fallback][:3]
+    result.alternative_skills = [_(s) for s in alternatives[1:] if s != fallback][:3]
     logger.info("Blocked unjustified skill repeat %s → %s", original, fallback)
     return result
 
@@ -557,7 +575,7 @@ def _run_skill_selection_inner(
     session.selected_skill = result.selected_skill
     reason = result.reason or ""
     if result.is_repeat and result.repeat_justification:
-        reason = f"{reason} 【复训理由】{result.repeat_justification}".strip()
+        reason = f"{reason} {_('【复训理由】')}{result.repeat_justification}".strip()
     session.selection_reason = reason
     session.rag_context_ids = result.source_chunk_ids
     session.save(update_fields=["selected_module", "selected_skill", "selection_reason", "rag_context_ids"])
@@ -877,7 +895,7 @@ def generate_session_summary(
         session=session,
         user=user,
         role=ChatMessage.Role.SYSTEM,
-        content=f"[系统] 教学已完成。摘要：{session.teaching_summary}",
+        content=_("[系统] 教学已完成。摘要：%(summary)s") % {"summary": session.teaching_summary},
     )
 
     return summary_dict

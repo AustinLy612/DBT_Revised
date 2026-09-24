@@ -18,9 +18,11 @@
     root.dataset.theme = theme;
     var button = document.querySelector(".dbt-theme-toggle");
     if (!button) return;
-    var next = theme === "dark" ? "浅色模式" : "深色模式";
-    button.setAttribute("aria-label", "切换到" + next);
-    button.title = "切换到" + next;
+    var english = root.lang.toLowerCase().startsWith("en");
+    var next = theme === "dark" ? (english ? "Light mode" : "浅色模式") : (english ? "Dark mode" : "深色模式");
+    var action = english ? "Switch to " + next.toLowerCase() : "切换到" + next;
+    button.setAttribute("aria-label", action);
+    button.title = action;
     button.querySelector(".dbt-theme-label").textContent = next;
     button.querySelector(".dbt-theme-icon").textContent = theme === "dark" ? "☀" : "☾";
   }

@@ -3,6 +3,9 @@
 (function () {
   "use strict";
 
+  function isEnglish() { return (document.documentElement.lang || "").toLowerCase().startsWith("en"); }
+  function L(chinese, english) { return isEnglish() ? english : chinese; }
+
   // ── State ──
   let isRecording = false;
   let mediaRecorder = null;
@@ -36,13 +39,13 @@
   function _setButtonPlaying(msgId) {
     if (!msgId) return;
     var btn = document.getElementById("tts-btn-" + msgId);
-    if (btn) { btn.disabled = false; btn.textContent = "⏹"; btn.title = "停止播放"; }
+    if (btn) { btn.disabled = false; btn.textContent = "⏹"; btn.title = L("停止播放", "Stop playback"); }
   }
 
   function _resetButton(msgId) {
     if (!msgId) return;
     var btn = document.getElementById("tts-btn-" + msgId);
-    if (btn) { btn.disabled = false; btn.textContent = "🔊"; btn.title = "语音播报"; }
+    if (btn) { btn.disabled = false; btn.textContent = "🔊"; btn.title = L("语音播报", "Read aloud"); }
   }
 
   function _showAudioBar() {
@@ -55,7 +58,7 @@
     bar.classList.remove("hidden");
     var status = document.getElementById("audio-bar-status");
     if (status) {
-      status.textContent = "正在播放语音...";
+      status.textContent = L("正在播放语音...", "Playing audio...");
       status.classList.remove("text-red-600");
       status.classList.add("text-gray-700");
     }
@@ -71,7 +74,7 @@
     bar.classList.add("bg-blue-50", "border-blue-200");
     var status = document.getElementById("audio-bar-status");
     if (status) {
-      status.textContent = "正在播放语音...";
+      status.textContent = L("正在播放语音...", "Playing audio...");
       status.classList.remove("text-red-600");
       status.classList.add("text-gray-700");
     }
@@ -92,6 +95,10 @@
         // Different message — fall through to play new audio
       }
 
+      // The configured server voice is Chinese. Use the browser's English
+      // voice for newly generated English lessons; keep the Chinese path intact.
+      if (isEnglish() && _playBrowserSpeech(text, messageId)) return;
+
       // ── Blob cache check ──
       if (messageId && _blobCache.has(messageId)) {
         var cached = _blobCache.get(messageId);
@@ -103,7 +110,7 @@
       if (btn) {
         btn.disabled = true;
         btn.textContent = "⟳";
-        btn.title = "加载中...";
+        btn.title = L("加载中...", "Loading...");
       }
 
       var formData = new FormData();
@@ -264,12 +271,13 @@
     DBT_TTS.stop();
 
     var utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "zh-CN";
+    utterance.lang = isEnglish() && !/[\u3400-\u9fff]/.test(text) ? "en-US" : "zh-CN";
     utterance.rate = 1;
 
     var voices = window.speechSynthesis.getVoices();
     var chineseVoice = voices.find(function (voice) {
-      return /^zh(-|_)?CN/i.test(voice.lang) || /chinese|中文/i.test(voice.name);
+      return utterance.lang === "en-US" ? /^en(-|_)?/i.test(voice.lang) :
+        (/^zh(-|_)?CN/i.test(voice.lang) || /chinese|中文/i.test(voice.name));
     });
     if (chineseVoice) {
       utterance.voice = chineseVoice;
@@ -288,7 +296,7 @@
 
     var status = document.getElementById("audio-bar-status");
     if (status) {
-      status.textContent = "正在使用浏览器语音播报...";
+      status.textContent = L("正在使用浏览器语音播报...", "Using browser speech...");
     }
 
     function cleanup() {
@@ -471,7 +479,7 @@
     if (btn) {
       btn.disabled = true;
       btn.textContent = "⟳";
-      btn.title = "加载中...";
+      btn.title = L("加载中...", "Loading...");
     }
 
     fetch("/media/tts/synthesize/", {
@@ -508,7 +516,7 @@
           return;
         }
         _autoPlayPending = false;
-        if (btn) { btn.disabled = false; btn.textContent = "🔊"; btn.title = "语音播报"; }
+        if (btn) { btn.disabled = false; btn.textContent = "🔊"; btn.title = L("语音播报", "Read aloud"); }
         var bar = document.getElementById("audio-player-bar");
         var status = document.getElementById("audio-bar-status");
         if (bar) {
@@ -517,7 +525,7 @@
           bar.style.display = "flex";
         }
         if (status) {
-          status.textContent = "语音播报失败";
+          status.textContent = L("语音播报失败", "Speech playback failed");
           status.classList.add("text-red-600");
         }
         setTimeout(function () {
@@ -528,7 +536,7 @@
             bar.style.display = "none";
           }
           if (status) {
-            status.textContent = "正在播放语音...";
+            status.textContent = L("正在播放语音...", "Playing audio...");
             status.classList.remove("text-red-600");
           }
         }, 5000);
@@ -560,7 +568,7 @@
       if (SpeechRecognition) {
         // Path 1: Browser SpeechRecognition (works outside China)
         var rec = new SpeechRecognition();
-        rec.lang = "zh-CN";
+        rec.lang = isEnglish() ? "en-US" : "zh-CN";
         rec.interimResults = true;
         rec.continuous = false;
         this._recognition = rec;
@@ -578,7 +586,7 @@
             if (finalText) chatInput.focus();
           }
           if (statusEl) {
-            statusEl.textContent = finalText ? "✓ 识别完成" : "聆听中: " + interimText;
+            statusEl.textContent = finalText ? L("✓ 识别完成", "✓ Transcription complete") : L("聆听中: ", "Listening: ") + interimText;
           }
         };
 
@@ -588,7 +596,7 @@
           isRecording = false;
           // SpeechRecognition failed for any reason — always try MediaRecorder fallback
           if (event.error !== "aborted") {
-            if (statusEl) statusEl.textContent = "切换至录音模式...";
+            if (statusEl) statusEl.textContent = L("切换至录音模式...", "Switching to recording...");
             self._startRecording(onStart, onError);
           }
         };
@@ -600,7 +608,7 @@
 
         rec.start();
         isRecording = true;
-        if (statusEl) statusEl.textContent = "聆听中...";
+        if (statusEl) statusEl.textContent = L("聆听中...", "Listening...");
         if (onStart) onStart();
       } else {
         // No SpeechRecognition → go straight to server-side
@@ -637,12 +645,12 @@
 
           mediaRecorder.start();
           isRecording = true;
-          if (statusEl) statusEl.textContent = "录音中...";
+          if (statusEl) statusEl.textContent = L("录音中...", "Recording...");
           if (onStart) onStart();
         })
         .catch(function (err) {
           console.error("Microphone access failed:", err);
-          if (statusEl) statusEl.textContent = "✗ 麦克风访问失败";
+          if (statusEl) statusEl.textContent = L("✗ 麦克风访问失败", "✗ Microphone access failed");
           if (onError) onError(err);
         });
     },
@@ -650,7 +658,7 @@
     _transcribeServer: function (audioBlob) {
       var chatInput = document.getElementById("chat-input");
       var statusEl = document.getElementById("asr-status");
-      if (statusEl) statusEl.textContent = "识别中...";
+      if (statusEl) statusEl.textContent = L("识别中...", "Transcribing...");
 
       var formData = new FormData();
       formData.append("audio", audioBlob, "recording.webm");
@@ -664,14 +672,14 @@
         .then(function (data) {
           if (data.success) {
             if (chatInput) { chatInput.value = data.text; chatInput.focus(); }
-            if (statusEl) statusEl.textContent = "✓ 识别完成";
+            if (statusEl) statusEl.textContent = L("✓ 识别完成", "✓ Transcription complete");
           } else {
-            if (statusEl) statusEl.textContent = "✗ " + (data.error || "语音识别失败");
+            if (statusEl) statusEl.textContent = "✗ " + (data.error || L("语音识别失败", "Speech recognition failed"));
           }
         })
         .catch(function (err) {
           console.error("ASR server request failed:", err);
-          if (statusEl) statusEl.textContent = "✗ 请求失败，请检查网络";
+          if (statusEl) statusEl.textContent = L("✗ 请求失败，请检查网络", "✗ Request failed. Check your network.");
         });
     },
 
@@ -800,11 +808,11 @@
         .catch(function (err) {
           console.error("Stream error:", err);
           var streamText = aiBubble.querySelector("#streaming-text");
-          if (streamText) { streamText.innerHTML = self._escapeHtml("错误: " + err.message); streamText.id = ""; }
+          if (streamText) { streamText.innerHTML = self._escapeHtml(L("错误: ", "Error: ") + err.message); streamText.id = ""; }
           var cursor = aiBubble.querySelector("#streaming-cursor");
           if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
           if (indicator) indicator.style.display = "none";
-          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = L("发送", "Send"); }
           if (aiBubble) aiBubble.id = "";
         });
     },
@@ -832,7 +840,7 @@
             // Stream ended — clean up all IDs so next bubble's are unique
             if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
             if (indicator) indicator.style.display = "none";
-            if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+            if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = L("发送", "Send"); }
             if (streamText) streamText.id = "";
             if (aiBubble) aiBubble.id = "";
             DBT_Chat.scrollToBottom();
@@ -874,7 +882,7 @@
                   };
                   ttsBtn.id = "tts-btn-" + msgId;
                   ttsBtn.className = "ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom";
-                  ttsBtn.title = "语音播报";
+                  ttsBtn.title = L("语音播报", "Read aloud");
                   ttsBtn.textContent = "🔊";
                   aiBubble.appendChild(ttsBtn);
                 }
@@ -888,11 +896,11 @@
                   DBT_Image.pollTeachingMessage(msgId, aiDiv);
                 }
               } else if (event.type === "error") {
-                var errMsg = event.message || "未知错误";
+                var errMsg = event.message || L("未知错误", "Unknown error");
                 _renderContent(errMsg);
                 if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
                 if (indicator) indicator.style.display = "none";
-                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = L("发送", "Send"); }
               }
             } catch (e) {
               // Skip malformed JSON lines
@@ -903,7 +911,7 @@
           console.error("Stream read error:", err);
           if (cursor) { cursor.style.display = "none"; cursor.id = ""; }
           if (indicator) indicator.style.display = "none";
-          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = "发送"; }
+          if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = L("发送", "Send"); }
           if (streamText) streamText.id = "";
         });
       }
@@ -924,7 +932,7 @@
       pollDiv.innerHTML =
         '<div class="p-3 bg-purple-50 border border-purple-200 rounded-lg text-center">' +
         '<div class="inline-block w-4 h-4 border-2 border-purple-200 border-t-purple-500 rounded-full animate-spin"></div>' +
-        '<span class="text-xs text-purple-600 ml-2">情景配图生成中...</span></div>';
+        '<span class="text-xs text-purple-600 ml-2">' + L("情景配图生成中...", "Generating scene illustration...") + '</span></div>';
       if (aiDiv) {
         var bubble = aiDiv.querySelector("div");
         (bubble || aiDiv).appendChild(pollDiv);
@@ -957,7 +965,7 @@
       if (!target) return;
 
       target.innerHTML =
-        '<div class="text-sm text-gray-400 animate-pulse">正在生成图片...</div>';
+        '<div class="text-sm text-gray-400 animate-pulse">' + L("正在生成图片...", "Generating image...") + '</div>';
 
       var formData = new FormData();
       formData.append("prompt", prompt);
@@ -983,7 +991,7 @@
             var msgDiv = document.createElement("div");
             msgDiv.className = "flex justify-center";
             msgDiv.innerHTML = '<div class="bg-purple-50 border border-purple-200 rounded-lg px-4 py-3 max-w-[85%]">' +
-              '<p class="text-xs text-purple-500 mb-2">生成的教学配图</p>' +
+              '<p class="text-xs text-purple-500 mb-2">' + L("生成的教学配图", "Generated lesson illustration") + '</p>' +
               html.replace('generated-image', '') +
               '</div>';
             chatContainer.appendChild(msgDiv);
@@ -992,7 +1000,7 @@
         })
         .catch(function (err) {
           target.innerHTML =
-            '<div class="text-red-500 text-sm">图片生成失败: ' +
+            '<div class="text-red-500 text-sm">' + L("图片生成失败: ", "Image generation failed: ") +
             err.message +
             "</div>";
         });

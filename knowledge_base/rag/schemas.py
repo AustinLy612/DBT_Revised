@@ -7,7 +7,23 @@ serve two purposes simultaneously:
    so the LLM knows the expected output shape.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+_ENUM_TRANSLATIONS = {
+    "beginner": "初级", "intermediate": "中级", "advanced": "高级",
+    "good": "良好", "fair": "一般", "needs review": "需要复习",
+    "explanation": "讲解", "example": "示例", "question": "提问",
+    "feedback": "反馈", "summary": "总结", "practice": "练习",
+    "none": "无", "low": "低", "medium": "中", "high": "高",
+}
+
+
+def canonical_enum(value):
+    """Accept English model enums while preserving existing Chinese internal codes."""
+    if isinstance(value, str):
+        return _ENUM_TRANSLATIONS.get(value.strip().lower(), value)
+    return value
 
 
 # ── Skill Selection ──
@@ -78,6 +94,11 @@ class SkillSelectionResult(BaseModel):
         default_factory=list,
         description="支撑推荐的知识库chunk ID列表",
     )
+
+    @field_validator("skill_difficulty", mode="before")
+    @classmethod
+    def normalize_difficulty(cls, value):
+        return canonical_enum(value)
 
 
 # ── Teaching Plan ──
@@ -159,6 +180,11 @@ class TeachingContent(BaseModel):
         description="风险判定理由",
     )
 
+    @field_validator("message_type", "risk_level", mode="before")
+    @classmethod
+    def normalize_codes(cls, value):
+        return canonical_enum(value)
+
 
 # ── Teaching Summary ──
 
@@ -180,6 +206,11 @@ class TeachingSummary(BaseModel):
     summary_text: str = Field(
         default="", description="综合教学摘要文本"
     )
+
+    @field_validator("student_understanding", mode="before")
+    @classmethod
+    def normalize_understanding(cls, value):
+        return canonical_enum(value)
 
 
 # ── Test Questions ──
@@ -222,6 +253,11 @@ class TestQuestions(BaseModel):
         pattern=r"^(初级|中级|高级)$",
     )
 
+    @field_validator("test_difficulty", mode="before")
+    @classmethod
+    def normalize_difficulty(cls, value):
+        return canonical_enum(value)
+
 
 # ── Risk Assessment ──
 
@@ -251,3 +287,8 @@ class RiskAssessment(BaseModel):
         default_factory=list,
         description="触发的关键词列表（如有）",
     )
+
+    @field_validator("risk_level", mode="before")
+    @classmethod
+    def normalize_risk(cls, value):
+        return canonical_enum(value)

@@ -12,6 +12,7 @@ from http import HTTPStatus
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext as _
 from django.views.decorators.csrf import csrf_exempt
 
 from . import services
@@ -45,7 +46,7 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
 
     prompt = request.POST.get("prompt", "").strip()
     if not prompt:
-        return _htmx_error("请输入图片描述。")
+        return _htmx_error(_("请输入图片描述。"))
 
     model = request.POST.get("model", services.DEFAULT_IMAGE_MODEL)
     source = request.POST.get("source", "manual")
@@ -56,7 +57,7 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
 
     resource_id = test_question_id or session_id or f"manual:{request.user.id}"
     if not try_acquire_image_slot("interactive"):
-        return _htmx_error("配图服务繁忙，请稍后再试。")
+        return _htmx_error(_("配图服务繁忙，请稍后再试。"))
 
     try:
         result = run_with_image_slot(
@@ -66,7 +67,7 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
         )
     except services.ConfigurationError as exc:
         logger.error("Image generation config error: %s", exc)
-        return _htmx_error("图像生成服务未配置，请联系管理员。")
+        return _htmx_error(_("图像生成服务未配置，请联系管理员。"))
     except services.APIError as exc:
         logger.error("Image generation API error: %s", exc)
         log = ImageGenerationLog.objects.create(
@@ -81,7 +82,7 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
             _set_session(log, session_id)
         if test_question_id:
             _set_test_question(log, test_question_id)
-        return _htmx_error("图像生成失败，请稍后再试。")
+        return _htmx_error(_("图像生成失败，请稍后再试。"))
 
     image_url = result["urls"][0] if result["urls"] else ""
     if not image_url:
@@ -93,7 +94,7 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
             error_message="API returned no image URL",
             source=source,
         )
-        return _htmx_error("图像生成失败：未返回图片。")
+        return _htmx_error(_("图像生成失败：未返回图片。"))
 
     log = ImageGenerationLog.objects.create(
         user=request.user,
@@ -124,9 +125,9 @@ def generate_image_view(request: HttpRequest) -> HttpResponse:
 
     return HttpResponse(
         f'<div class="generated-image flex flex-col items-center">'
-        f'<img src="{image_url}" alt="生成的图片" '
+        f'<img src="{image_url}" alt="{_("生成的图片")}" '
         f'class="rounded-lg shadow max-w-full" loading="lazy">'
-        f'<p class="text-xs text-gray-400 mt-1">模型: {model}</p></div>'
+        f'<p class="text-xs text-gray-400 mt-1">{_("模型")}: {model}</p></div>'
     )
 
 
@@ -157,7 +158,7 @@ def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
 
     text = request.POST.get("text", "").strip()
     if not text:
-        return JsonResponse({"error": "文本不能为空"}, status=400)
+        return JsonResponse({"error": _("文本不能为空")}, status=400)
 
     if len(text) > 3000:
         text = text[:3000]
@@ -174,7 +175,7 @@ def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
             text, model=model, voice=voice, return_audio_bytes=True
         )
     except services.ConfigurationError:
-        return JsonResponse({"error": "语音服务未配置"}, status=503)
+        return JsonResponse({"error": _("语音服务未配置")}, status=503)
     except services.APIError as exc:
         logger.error("TTS API error: %s", exc)
         AudioSynthesisLog.objects.create(
@@ -185,7 +186,7 @@ def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
             status=AudioSynthesisLog.Status.FAILED,
             error_message=str(exc)[:500],
         )
-        return JsonResponse({"error": "语音合成失败"}, status=502)
+        return JsonResponse({"error": _("语音合成失败")}, status=502)
 
     audio_bytes = result.get("audio_bytes")
     audio_url = result.get("audio_url", "")
@@ -219,7 +220,7 @@ def synthesize_speech_view(request: HttpRequest) -> HttpResponse:
     if audio_url:
         return JsonResponse({"audio_url": audio_url, "format": result.get("format", "mp3")})
 
-    return JsonResponse({"error": "未能获取音频数据"}, status=502)
+    return JsonResponse({"error": _("未能获取音频数据")}, status=502)
 
 
 @login_required
@@ -240,7 +241,7 @@ def stream_speech_view(request: HttpRequest) -> HttpResponse:
 
     text = request.POST.get("text", "").strip()
     if not text:
-        return JsonResponse({"error": "文本不能为空"}, status=400)
+        return JsonResponse({"error": _("文本不能为空")}, status=400)
 
     if len(text) > 3000:
         text = text[:3000]
@@ -271,7 +272,7 @@ def stream_speech_view(request: HttpRequest) -> HttpResponse:
         return response
 
     except services.ConfigurationError:
-        return JsonResponse({"error": "语音服务未配置"}, status=503)
+        return JsonResponse({"error": _("语音服务未配置")}, status=503)
     except services.APIError as exc:
         logger.error("TTS stream API error: %s", exc)
         AudioSynthesisLog.objects.create(
@@ -282,10 +283,10 @@ def stream_speech_view(request: HttpRequest) -> HttpResponse:
             status=AudioSynthesisLog.Status.FAILED,
             error_message=str(exc)[:500],
         )
-        return JsonResponse({"error": "语音合成失败"}, status=502)
+        return JsonResponse({"error": _("语音合成失败")}, status=502)
     except Exception:
         logger.exception("TTS stream unexpected error")
-        return JsonResponse({"error": "语音合成失败"}, status=502)
+        return JsonResponse({"error": _("语音合成失败")}, status=502)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -309,11 +310,11 @@ def transcribe_audio_view(request: HttpRequest) -> HttpResponse:
 
     audio_file = request.FILES.get("audio")
     if not audio_file:
-        return JsonResponse({"success": False, "error": "未收到音频数据"})
+        return JsonResponse({"success": False, "error": _("未收到音频数据")})
 
     audio_bytes = audio_file.read()
     if not audio_bytes:
-        return JsonResponse({"success": False, "error": "音频数据为空"})
+        return JsonResponse({"success": False, "error": _("音频数据为空")})
 
     # Determine format from content type or extension
     content_type = audio_file.content_type or ""
@@ -338,7 +339,7 @@ def transcribe_audio_view(request: HttpRequest) -> HttpResponse:
     except services.ConfigurationError:
         return JsonResponse({
             "success": False,
-            "error": "语音识别未配置。请在.env中设置 VOLCENGINE_API_KEY。",
+            "error": _("语音识别未配置。请在.env中设置 VOLCENGINE_API_KEY。"),
         })
     except services.APIError as exc:
         logger.error("ASR API error: %s", exc)
@@ -349,7 +350,7 @@ def transcribe_audio_view(request: HttpRequest) -> HttpResponse:
             audio_duration_ms=audio_duration_ms,
             model="",
         )
-        return JsonResponse({"success": False, "error": "语音识别失败，请稍后再试。"})
+        return JsonResponse({"success": False, "error": _("语音识别失败，请稍后再试。")})
 
     transcribed_text = result["transcribed_text"]
 

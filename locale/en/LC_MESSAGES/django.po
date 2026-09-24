@@ -1,0 +1,1616 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "DBT 技能教学平台"
+msgstr "DBT Skills Learning Platform"
+
+msgid "DBT 技能教学平台 - 首页"
+msgstr "DBT Skills Learning Platform - Home"
+
+msgid "跳转到主要内容"
+msgstr "Skip to main content"
+
+msgid "主导航"
+msgstr "Main navigation"
+
+msgid "教学"
+msgstr "Learning"
+
+msgid "心情"
+msgstr "Mood"
+
+msgid "DBT日志"
+msgstr "DBT Diary"
+
+msgid "个人问卷"
+msgstr "Profile questionnaire"
+
+msgid "学生报告"
+msgstr "Student reports"
+
+msgid "退出"
+msgstr "Log out"
+
+msgid "登录"
+msgstr "Log in"
+
+msgid "注册"
+msgstr "Sign up"
+
+msgid "语言"
+msgstr "Language"
+
+msgid "切换"
+msgstr "Switch"
+
+msgid "欢迎使用 DBT 技能教学平台"
+msgstr "Welcome to the DBT Skills Learning Platform"
+
+msgid "本平台为研究用 DBT 技能教学与训练工具，通过个性化 AI 教学帮助你学习和练习正念技能。"
+msgstr "This research platform offers personalized AI-guided DBT skills learning and practice."
+
+msgid "查看学生报告"
+msgstr "View student reports"
+
+msgid "开始教学"
+msgstr "Start learning"
+
+msgid "填写问卷"
+msgstr "Complete questionnaire"
+
+msgid "报告查看权限仅适用于已授权的学生报告。"
+msgstr "Report access is limited to authorized student reports."
+
+msgid "你的学习工具"
+msgstr "Your learning tools"
+
+msgid "心情记录"
+msgstr "Mood log"
+
+msgid "查看和记录心情变化"
+msgstr "View and record changes in your mood"
+
+msgid "成就"
+msgstr "Achievements"
+
+msgid "回顾练习进展"
+msgstr "Review your practice progress"
+
+msgid "填写日常技能练习记录"
+msgstr "Record your daily skills practice"
+
+msgid "请先完成个人问卷，以便 AI 为你提供个性化教学体验。"
+msgstr "Complete the profile questionnaire first so the AI can personalize your learning."
+
+msgid "登录 - DBT 技能教学平台"
+msgstr "Log in - DBT Skills Learning Platform"
+
+msgid "继续你的 DBT 技能学习。"
+msgstr "Continue learning DBT skills."
+
+msgid "没有账号？"
+msgstr "No account yet? "
+
+msgid "注册 - DBT 技能教学平台"
+msgstr "Sign up - DBT Skills Learning Platform"
+
+msgid "注册新账号"
+msgstr "Create an account"
+
+msgid "填写邀请码，创建你的学习账号。"
+msgstr "Enter an invitation code to create your learning account."
+
+msgid "已有账号？"
+msgstr "Already have an account? "
+
+msgid "教学 - DBT 技能教学平台"
+msgstr "Learning - DBT Skills Learning Platform"
+
+msgid "DBT 技能教学"
+msgstr "DBT Skills Learning"
+
+msgid "当前使用问卷信息"
+msgstr "Current profile information"
+
+msgid "性别"
+msgstr "Gender"
+
+msgid "年龄"
+msgstr "Age"
+
+msgid "岁"
+msgstr "years old"
+
+msgid "年级"
+msgstr "Grade"
+
+msgid "问卷更新时间"
+msgstr "Profile last updated"
+
+msgid "爱好"
+msgstr "Interests"
+
+msgid "关注"
+msgstr "Concerns"
+
+msgid "其他爱好"
+msgstr "Other interests"
+
+msgid "开始新教学"
+msgstr "Start a new lesson"
+
+msgid "记录心情"
+msgstr "Record mood"
+
+msgid "心情历史"
+msgstr "Mood history"
+
+msgid "最近教学记录"
+msgstr "Recent lessons"
+
+msgid "未选择技能"
+msgstr "No skill selected"
+
+msgid "心情记录 - DBT 技能教学平台"
+msgstr "Mood log - DBT Skills Learning Platform"
+
+msgid "还没有心情记录"
+msgstr "No mood entries yet"
+
+msgid "开始记录你的心情变化吧"
+msgstr "Start noticing how your mood changes."
+
+msgid "记录第一条心情"
+msgstr "Record your first mood"
+
+msgid "进行中"
+msgstr "In progress"
+
+msgid "已完成"
+msgstr "Completed"
+
+msgid "风险中止"
+msgstr "Stopped for safety"
+
+msgid "用户终止"
+msgstr "Ended by user"
+
+msgid "手动记录"
+msgstr "Manual entry"
+
+msgid "教学前"
+msgstr "Before lesson"
+
+msgid "教学后"
+msgstr "After lesson"
+
+msgid "测试后"
+msgstr "After test"
+
+msgid "男"
+msgstr "Male"
+
+msgid "女"
+msgstr "Female"
+
+msgid "其他"
+msgstr "Other"
+
+msgid "不愿透露"
+msgstr "Prefer not to say"
+
+msgid "初一"
+msgstr "Grade 7"
+
+msgid "初二"
+msgstr "Grade 8"
+
+msgid "初三"
+msgstr "Grade 9"
+
+msgid "高一"
+msgstr "Grade 10"
+
+msgid "高二"
+msgstr "Grade 11"
+
+msgid "高三"
+msgstr "Grade 12"
+
+msgid "问卷 - DBT 技能教学平台"
+msgstr "Questionnaire - DBT Skills Learning Platform"
+
+msgid "欢迎！请先完成问卷"
+msgstr "Welcome! Please complete your questionnaire"
+
+msgid "在开始教学之前，我们需要了解一些关于你的基本信息。这些信息将帮助 AI 为你提供更个性化的教学体验。"
+msgstr "Before the lesson, we need to learn a little about you so the AI can personalize your experience."
+
+msgid "修改问卷"
+msgstr "Edit questionnaire"
+
+msgid "修改后的信息将在下次教学时生效。"
+msgstr "Your changes will apply to the next lesson."
+
+msgid "提交并开始使用"
+msgstr "Save and continue"
+
+msgid "保存修改"
+msgstr "Save changes"
+
+msgid "爱好（最多选 5 项）"
+msgstr "Interests (choose up to five)"
+
+msgid "苦恼/困扰（最多选 5 项）"
+msgstr "Concerns (choose up to five)"
+
+msgid "请输入你的年龄"
+msgstr "Enter your age"
+
+msgid "如果你选择了「其他」，请在此补充"
+msgstr "If you chose Other, tell us more here"
+
+msgid "其他爱好补充"
+msgstr "Other interests"
+
+msgid "其他困扰补充"
+msgstr "Other concerns"
+
+msgid "请输入合理的年龄（10-25 岁）"
+msgstr "Enter an age between 10 and 25."
+
+msgid "最多选择 5 项爱好"
+msgstr "Choose no more than five interests."
+
+msgid "最多选择 5 项困扰"
+msgstr "Choose no more than five concerns."
+
+msgid "体育运动"
+msgstr "Sports"
+
+msgid "音乐"
+msgstr "Music"
+
+msgid "绘画/手工"
+msgstr "Art and crafts"
+
+msgid "阅读"
+msgstr "Reading"
+
+msgid "写作"
+msgstr "Writing"
+
+msgid "动漫/影视"
+msgstr "Animation, film and TV"
+
+msgid "游戏"
+msgstr "Games"
+
+msgid "编程/科技"
+msgstr "Programming and technology"
+
+msgid "科学探索"
+msgstr "Exploring science"
+
+msgid "宠物"
+msgstr "Pets"
+
+msgid "美食/烹饪"
+msgstr "Food and cooking"
+
+msgid "旅行/户外"
+msgstr "Travel and outdoors"
+
+msgid "和朋友聊天"
+msgstr "Talking with friends"
+
+msgid "独处/安静活动"
+msgstr "Quiet time alone"
+
+msgid "学业压力"
+msgstr "Academic stress"
+
+msgid "考试焦虑"
+msgstr "Test anxiety"
+
+msgid "注意力不集中"
+msgstr "Difficulty concentrating"
+
+msgid "拖延"
+msgstr "Procrastination"
+
+msgid "和同学/朋友关系不好"
+msgstr "Difficult relationships with classmates or friends"
+
+msgid "感到孤独或被排斥"
+msgstr "Feeling lonely or excluded"
+
+msgid "家庭沟通困难"
+msgstr "Difficulty communicating at home"
+
+msgid "和父母/监护人冲突"
+msgstr "Conflict with parents or guardians"
+
+msgid "情绪低落"
+msgstr "Low mood"
+
+msgid "容易生气或情绪失控"
+msgstr "Anger or difficulty managing emotions"
+
+msgid "经常担心或焦虑"
+msgstr "Frequent worry or anxiety"
+
+msgid "不自信/自我评价低"
+msgstr "Low confidence or self-esteem"
+
+msgid "睡眠困扰"
+msgstr "Sleep difficulties"
+
+msgid "外貌或身体形象焦虑"
+msgstr "Appearance or body-image concerns"
+
+msgid "手机/网络使用困扰"
+msgstr "Phone or internet use concerns"
+
+msgid "升学或未来压力"
+msgstr "School or future-related pressure"
+
+msgid "和老师沟通困难"
+msgstr "Difficulty communicating with teachers"
+
+msgid "被欺负或校园欺凌"
+msgstr "Bullying at school"
+
+msgid "不想回答"
+msgstr "Prefer not to answer"
+
+msgid "记录心情 - DBT 技能教学平台"
+msgstr "Record mood - DBT Skills Learning Platform"
+
+msgid "返回心情记录"
+msgstr "Back to mood log"
+
+msgid "记录现在的心情"
+msgstr "How are you feeling now?"
+
+msgid "很差"
+msgstr "Very low"
+
+msgid "不好"
+msgstr "Low"
+
+msgid "一般"
+msgstr "Okay"
+
+msgid "不错"
+msgstr "Good"
+
+msgid "很好"
+msgstr "Very good"
+
+msgid "备注（可选）"
+msgstr "Note (optional)"
+
+msgid "什么让你有这个心情？"
+msgstr "What might be behind this feeling?"
+
+msgid "有什么想记录的吗？"
+msgstr "Would you like to add a note?"
+
+msgid "保存心情记录"
+msgstr "Save mood entry"
+
+msgid "记录下你此刻的心情吧。"
+msgstr "Take a moment to record how you feel."
+
+msgid "跳过"
+msgstr "Skip"
+
+msgid "成就 - DBT 技能教学平台"
+msgstr "Achievements - DBT Skills Learning Platform"
+
+msgid "我的成就"
+msgstr "My achievements"
+
+msgid "总训练次数"
+msgstr "Total lessons"
+
+msgid "成功训练"
+msgstr "Successful lessons"
+
+msgid "连续学习天数"
+msgstr "Consecutive learning days"
+
+msgid "成就解锁"
+msgstr "Achievements unlocked"
+
+msgid "解锁于"
+msgstr "Unlocked on"
+
+msgid "第一步"
+msgstr "First step"
+
+msgid "完成第一次完整训练（教学+测试通过4/5）"
+msgstr "Complete your first lesson and pass its test (4/5)"
+
+msgid "十次训练"
+msgstr "Ten lessons"
+
+msgid "累计完成10次成功训练"
+msgstr "Complete ten successful lessons"
+
+msgid "七日坚持"
+msgstr "Seven-day streak"
+
+msgid "连续学习7天"
+msgstr "Learn for seven consecutive days"
+
+msgid "十五日坚持"
+msgstr "Fifteen-day streak"
+
+msgid "连续学习15天"
+msgstr "Learn for fifteen consecutive days"
+
+msgid "第一次测试未通过"
+msgstr "First test not passed"
+
+msgid "五次测试未通过"
+msgstr "Five tests not passed"
+
+msgid "累计5次测试未通过"
+msgstr "Five tests were not passed in total"
+
+msgid "正念入门"
+msgstr "Mindfulness beginner"
+
+msgid "完成第一次正念技能训练"
+msgstr "Complete your first mindfulness lesson"
+
+msgid "满分通过"
+msgstr "Perfect score"
+
+msgid "单次测试5题全部答对"
+msgstr "Answer all five questions correctly in one test"
+
+msgid "重新出发"
+msgstr "Fresh start"
+
+msgid "一次测试未通过后，重测通过"
+msgstr "Pass a retest after not passing the first attempt"
+
+msgid "情绪记录开始"
+msgstr "Mood logging begins"
+
+msgid "第一次完成情绪记录"
+msgstr "Record your mood for the first time"
+
+msgid "退出登录 - DBT 技能教学平台"
+msgstr "Log out - DBT Skills Learning Platform"
+
+msgid "确认退出登录"
+msgstr "Log out?"
+
+msgid "你确定要退出当前账号吗？"
+msgstr "Are you sure you want to log out of this account?"
+
+msgid "取消"
+msgstr "Cancel"
+
+msgid "语音播报"
+msgstr "Read aloud"
+
+msgid "教学配图"
+msgstr "Lesson illustration"
+
+msgid "会话已中止"
+msgstr "Session ended"
+
+msgid "回答正确！"
+msgstr "Correct!"
+
+msgid "回答错误"
+msgstr "Not quite right"
+
+msgid "题目配图"
+msgstr "Question illustration"
+
+msgid "解析"
+msgstr "Explanation"
+
+msgid "下一题"
+msgstr "Next question"
+
+msgid "今日第"
+msgstr "Today's"
+
+msgid "次填写"
+msgstr "entry"
+
+msgid "1. 实时情绪状态"
+msgstr "1. Current emotions"
+
+msgid "请评估你此刻的情绪状态（1 = 完全没有，10 = 极度强烈）"
+msgstr "Rate how you feel right now (1 = not at all, 10 = extremely)."
+
+msgid "2. 主观痛苦水平"
+msgstr "2. Distress level"
+
+msgid "此刻你的痛苦程度有多高？（1 = 没有痛苦，10 = 极度痛苦）"
+msgstr "How distressed do you feel right now? (1 = none, 10 = extreme)."
+
+msgid "3. 自伤冲动 (NSSI Urge)"
+msgstr "3. Self-harm urge (NSSI)"
+
+msgid "此刻你有多强烈的伤害自己的冲动？（1 = 完全没有，10 = 极度强烈）"
+msgstr "How strong is your urge to hurt yourself right now? (1 = none, 10 = extreme)."
+
+msgid "4. 自杀冲动 (Suicide Urge)"
+msgstr "4. Suicidal urge"
+
+msgid "此刻你有多强烈的自杀冲动？（1 = 完全没有，10 = 极度强烈）"
+msgstr "How strong is your suicidal urge right now? (1 = none, 10 = extreme)."
+
+msgid "5. DBT技能使用"
+msgstr "5. DBT skills used"
+
+msgid "自上次测量以来，你是否使用过DBT技能？"
+msgstr "Have you used any DBT skills since your last entry?"
+
+msgid "是"
+msgstr "Yes"
+
+msgid "否"
+msgstr "No"
+
+msgid "使用过哪些DBT技能？"
+msgstr "Which DBT skills did you use?"
+
+msgid "此次技能使用对你的帮助程度？（1 = 毫无帮助，10 = 极大帮助）"
+msgstr "How helpful were these skills? (1 = not helpful, 10 = extremely helpful)."
+
+msgid "6. 医疗接触记录"
+msgstr "6. Care and treatment"
+
+msgid "自上次测量以来，你是否经历过以下情况？"
+msgstr "Have any of these happened since your last entry?"
+
+msgid "医生访谈"
+msgstr "Appointment with a clinician"
+
+msgid "团体治疗"
+msgstr "Group therapy"
+
+msgid "药物调整"
+msgstr "Medication change"
+
+msgid "提交日志"
+msgstr "Submit log"
+
+msgid "风险提示"
+msgstr "Safety notice"
+
+msgid "你刚才表达的内容可能表示你正在经历比较危险或难以独自承受的状态。当前教学将先暂停。"
+msgstr "What you shared suggests you may be facing something unsafe or difficult to manage alone. This lesson will pause."
+
+msgid "请尽快联系身边可信任的成年人，例如学校老师、班主任、学校心理老师、家长或监护人。"
+msgstr "Please contact a trusted adult nearby, such as a teacher, school counselor, parent or guardian, as soon as you can."
+
+msgid "你也可以拨打以下心理援助热线寻求帮助："
+msgstr "If you are in China, you can also call one of these mental-health support lines:"
+
+msgid "全国统一心理援助热线："
+msgstr "National mental-health support line:"
+
+msgid "北京市心理援助热线："
+msgstr "Beijing mental-health support line:"
+
+msgid "座机用户可拨打"
+msgstr "Landline callers can dial"
+
+msgid "如果你正处于立即危险中，请立刻联系身边成年人并寻求当地紧急帮助。"
+msgstr "If you are in immediate danger, contact a trusted adult and local emergency services now."
+
+msgid "返回教学首页"
+msgstr "Back to learning home"
+
+msgid "返回首页"
+msgstr "Back to home"
+
+msgid "数据导出"
+msgstr "Data export"
+
+msgid "返回管理后台"
+msgstr "Back to admin"
+
+msgid "返回报告仪表盘"
+msgstr "Back to reports dashboard"
+
+msgid "导出全部 (JSON)"
+msgstr "Export all (JSON)"
+
+msgid "导出全部 (CSV)"
+msgstr "Export all (CSV)"
+
+msgid "用户名"
+msgstr "Username"
+
+msgid "注册时间"
+msgstr "Joined"
+
+msgid "操作"
+msgstr "Actions"
+
+msgid "暂无学生用户。"
+msgstr "No student accounts yet."
+
+msgid "所有导出操作均会记录到管理员操作日志中。"
+msgstr "Every export is recorded in the administrator audit log."
+
+msgid "学生报告与数据导出"
+msgstr "Student reports and data export"
+
+msgid "查看学生报告、导出 PDF 和原始数据"
+msgstr "View student reports and export PDF or raw data"
+
+msgid "报告"
+msgstr "Report"
+
+msgid "查看报告"
+msgstr "View report"
+
+msgid "导出 PDF"
+msgstr "Export PDF"
+
+msgid "所有导出操作均会记录到操作日志中。"
+msgstr "Every export is recorded in the audit log."
+
+msgid "教学会话"
+msgstr "Learning session"
+
+msgid "教学已完成"
+msgstr "Lesson completed"
+
+msgid "教学摘要"
+msgstr "Lesson summary"
+
+msgid "教学结束了，记录一下你现在的心情吧。"
+msgstr "Your lesson is over. How do you feel now?"
+
+msgid "记录教学后心情"
+msgstr "Record mood after lesson"
+
+msgid "✓ 已记录教学后心情"
+msgstr "✓ Mood recorded"
+
+msgid "⚠ 会话已中止"
+msgstr "⚠ Session stopped"
+
+msgid "你刚才表达的内容可能表示你正在经历比较危险或难以独自承受的状态。当前教学已暂停。"
+msgstr "What you shared suggests you may be facing something unsafe or difficult to manage alone. The lesson has paused."
+
+msgid "会话已终止"
+msgstr "Session ended"
+
+msgid "此会话已被手动终止。"
+msgstr "This session was ended manually."
+
+msgid "开始测试"
+msgstr "Start test"
+
+msgid "测试记录"
+msgstr "Test history"
+
+msgid "通过"
+msgstr "Passed"
+
+msgid "未通过"
+msgstr "Not passed"
+
+msgid "已终止"
+msgstr "Ended"
+
+msgid "正确："
+msgstr "Correct:"
+
+msgid "（需答对 ≥ 4 题通过）"
+msgstr "(At least 4 correct answers to pass)"
+
+msgid "查看详情"
+msgstr "View details"
+
+msgid "继续答题 →"
+msgstr "Continue test →"
+
+msgid "重新测试"
+msgstr "Retake test"
+
+msgid "对话记录"
+msgstr "Conversation history"
+
+msgid "情景配图生成中..."
+msgstr "Generating scene illustration..."
+
+msgid "正在播放语音..."
+msgstr "Playing audio..."
+
+msgid "教学前心情记录"
+msgstr "Mood before lesson"
+
+msgid "在开始教学前，先记录一下你现在的心情吧。"
+msgstr "Before the lesson, record how you feel now."
+
+msgid "确认并开始"
+msgstr "Confirm and start"
+
+msgid "在开始之前，先聊聊你最近的情况"
+msgstr "Before we begin, let's talk about how you've been"
+
+msgid "了解你最近的经历和感受，才能为你推荐最适合的技能。"
+msgstr "Your recent experiences and feelings can help us recommend a useful skill."
+
+msgid "你的分享"
+msgstr "What you'd like to share"
+
+msgid "你可以分享任何事情——最近的心情变化、让你开心或困扰的事、学业或人际关系方面的感受。分享得越多，AI 越能为你推荐合适的技能。"
+msgstr "You can share changes in mood, things that made you happy or worried, or feelings about school and relationships. More context helps the AI recommend a relevant skill."
+
+msgid "分享并开始推荐"
+msgstr "Share and get a recommendation"
+
+msgid "你的分享仅用于本次教学推荐，不会被其他人看到。"
+msgstr "Your response is used for this lesson's recommendation and is not shown to other students."
+
+msgid "正在收集你的学习信息"
+msgstr "Gathering your learning context"
+
+msgid "正在读取你的问卷信息、学习历史和测试记录..."
+msgstr "Reading your questionnaire, lesson history and test records..."
+
+msgid "重试"
+msgstr "Retry"
+
+msgid "AI 技能推荐"
+msgstr "AI skill recommendation"
+
+msgid "基于你的问卷信息和学习历史，AI 推荐以下技能："
+msgstr "Based on your questionnaire and learning history, the AI recommends:"
+
+msgid "或者输入你想学习的技能："
+msgstr "Or enter a skill you want to learn:"
+
+msgid "确认并开始教学"
+msgstr "Confirm and begin lesson"
+
+msgid "正在准备教学资料"
+msgstr "Preparing lesson material"
+
+msgid "检索中..."
+msgstr "Retrieving..."
+
+msgid "页面将在几秒后自动刷新。"
+msgstr "This page will refresh in a few seconds."
+
+msgid "教学计划"
+msgstr "Lesson plan"
+
+msgid "无教学计划"
+msgstr "No lesson plan yet"
+
+msgid "情景配图"
+msgstr "Scene illustration"
+
+msgid "🎨 生成教学配图"
+msgstr "🎨 Generate lesson illustration"
+
+msgid "教学对话"
+msgstr "Lesson conversation"
+
+msgid "已关闭"
+msgstr "Off"
+
+msgid "AI 正在思考..."
+msgstr "AI is thinking..."
+
+msgid "发送"
+msgstr "Send"
+
+msgid "结束教学"
+msgstr "Finish lesson"
+
+msgid "终止会话"
+msgstr "End session"
+
+msgid "返回教学会话"
+msgstr "Back to lesson"
+
+msgid "测试通过！"
+msgstr "Test passed!"
+
+msgid "测试未通过"
+msgstr "Test not passed"
+
+msgid "正确率"
+msgstr "Accuracy"
+
+msgid "需答对 ≥ 4 题"
+msgstr "At least 4 correct answers"
+
+msgid "第几次测试"
+msgstr "Attempt number"
+
+msgid "测试结束了，记录一下你现在的心情吧。"
+msgstr "Your test is over. How do you feel now?"
+
+msgid "记录测试后心情"
+msgstr "Record mood after test"
+
+msgid "测试已终止"
+msgstr "Test ended"
+
+msgid "此测试已被手动终止。"
+msgstr "This test was ended manually."
+
+msgid "题目回顾"
+msgstr "Question review"
+
+msgid "未作答"
+msgstr "Not answered"
+
+msgid "模型:"
+msgstr "Model:"
+
+msgid "🖼 生成配图"
+msgstr "🖼 Generate illustration"
+
+msgid "解析："
+msgstr "Explanation:"
+
+msgid "题目生成超时"
+msgstr "Question generation timed out"
+
+msgid "测试题目未能成功生成，可能是 AI 服务暂时不可用或网络异常。"
+msgstr "Questions could not be generated. The AI service or network may be temporarily unavailable."
+
+msgid "重新创建测试"
+msgstr "Create a new test"
+
+msgid "正在生成测试题..."
+msgstr "Generating questions..."
+
+msgid "AI 正在根据教学内容为你出题，请稍候"
+msgstr "The AI is writing questions based on your lesson. Please wait."
+
+msgid "取消测试"
+msgstr "Cancel test"
+
+msgid "进度"
+msgstr "Progress"
+
+msgid "提交测试"
+msgstr "Submit test"
+
+msgid "终止"
+msgstr "End"
+
+msgid "🔄 重新生成配图"
+msgstr "🔄 Regenerate illustration"
+
+msgid "情景配图自动生成中..."
+msgstr "Generating scene illustration..."
+
+msgid "此题暂无配图"
+msgstr "No illustration for this question"
+
+msgid "提交答案"
+msgstr "Submit answer"
+
+msgid "正在检查..."
+msgstr "Checking..."
+
+msgid "所有题目已作答。"
+msgstr "You have answered all questions."
+
+msgid "返回报告列表"
+msgstr "Back to reports"
+
+msgid "的个人报告"
+msgstr " personal report"
+
+msgid "基础信息"
+msgstr "Basic information"
+
+msgid "用户名："
+msgstr "Username:"
+
+msgid "注册时间："
+msgstr "Joined:"
+
+msgid "性别："
+msgstr "Gender:"
+
+msgid "年龄："
+msgstr "Age:"
+
+msgid "年级："
+msgstr "Grade:"
+
+msgid "报告生成时间："
+msgstr "Generated:"
+
+msgid "兴趣爱好："
+msgstr "Interests:"
+
+msgid "困扰/担忧："
+msgstr "Concerns:"
+
+msgid "报告摘要"
+msgstr "Report summary"
+
+msgid "完成教学次数"
+msgstr "Lessons completed"
+
+msgid "测试次数"
+msgstr "Tests taken"
+
+msgid "总正确率"
+msgstr "Overall accuracy"
+
+msgid "情绪变化"
+msgstr "Mood over time"
+
+msgid "时间"
+msgstr "Date"
+
+msgid "情绪"
+msgstr "Mood"
+
+msgid "场景"
+msgstr "Context"
+
+msgid "备注"
+msgstr "Note"
+
+msgid "暂无情绪记录"
+msgstr "No mood records yet"
+
+msgid "技能学习次数"
+msgstr "Skills practiced"
+
+msgid "暂无技能学习记录"
+msgstr "No skills practiced yet"
+
+msgid "技能"
+msgstr "Skill"
+
+msgid "成绩"
+msgstr "Score"
+
+msgid "结果"
+msgstr "Result"
+
+msgid "重测"
+msgstr "Retest"
+
+msgid "首次"
+msgstr "First attempt"
+
+msgid "暂无测试记录"
+msgstr "No test records yet"
+
+msgid "暂未解锁成就"
+msgstr "No achievements unlocked yet"
+
+msgid "未填写"
+msgstr "Not provided"
+
+msgid "完成时间："
+msgstr "Completed: "
+
+msgid "技能："
+msgstr "Skill: "
+
+msgid "第 %(number)s 次测试"
+msgstr "Test attempt %(number)s"
+
+msgid "分享你最近的经历、感受或任何想说的..."
+msgstr "Share anything about your recent experiences or feelings..."
+
+msgid "留空则使用 AI 推荐"
+msgstr "Leave blank to use the AI recommendation"
+
+msgid "正在为「%(skill)s」生成教学计划，请勿重复提交。"
+msgstr "Preparing a lesson plan for “%(skill)s”. Please do not submit again."
+
+msgid "DBT技能教学情景图："
+msgstr "DBT skill teaching scene:"
+
+msgid "AI回复后自动语音播报"
+msgstr "Automatically read AI replies aloud"
+
+msgid "自动播报"
+msgstr "Auto-read"
+
+msgid "语音输入失败"
+msgstr "Voice input failed"
+
+msgid "输入你的想法或问题..."
+msgstr "Type a thought or question..."
+
+msgid "确定要结束本次教学吗？"
+msgstr "Finish this lesson?"
+
+msgid "确定要终止本次教学吗？"
+msgstr "End this session?"
+
+msgid "测试"
+msgstr "Test"
+
+msgid "测试："
+msgstr "Test: "
+
+msgid "（第 %(number)s 次）"
+msgstr "(Attempt %(number)s)"
+
+msgid "第 %(number)s 题"
+msgstr "Question %(number)s"
+
+msgid "正确"
+msgstr "Correct"
+
+msgid "错误"
+msgstr "Incorrect"
+
+msgid "确定要取消本次测试吗？"
+msgstr "Cancel this test?"
+
+msgid "已答："
+msgstr "Answered: "
+
+msgid "确定要提交测试吗？提交后无法修改答案。"
+msgstr "Submit this test? You cannot change your answers afterward."
+
+msgid "确定要终止测试吗？"
+msgstr "End this test?"
+
+msgid "第 %(current)s 题 / 共 %(total)s 题"
+msgstr "Question %(current)s of %(total)s"
+
+msgid "确定要提交测试吗？"
+msgstr "Submit this test?"
+
+msgid "%(name)s 的报告"
+msgstr "Report for %(name)s"
+
+msgid "%(name)s 的个人报告"
+msgstr "Personal report for %(name)s"
+
+msgid "%(age)s 岁"
+msgstr "%(age)s years old"
+
+msgid "第%(number)s次"
+msgstr "Attempt %(number)s"
+
+msgid "重测次数：%(count)s 次"
+msgstr "Retests: %(count)s"
+
+msgid "解锁于 %(date)s"
+msgstr "Unlocked on %(date)s"
+
+msgid "（解锁于 %(date)s）"
+msgstr "(Unlocked on %(date)s)"
+
+msgid "该学生暂未开始教学或测试。"
+msgstr "This student has not started lessons or tests yet."
+
+msgid "该学生共完成 %(lessons)s 次教学会话，参与了 %(tests)s 次测试。"
+msgstr "Lessons completed: %(lessons)s. Tests taken: %(tests)s."
+
+msgid "测试总正确率为 %(rate)s%%，表现良好。"
+msgstr "Overall test accuracy is %(rate)s%%, a strong result."
+
+msgid "测试总正确率为 %(rate)s%%，仍有提升空间。"
+msgstr "Overall test accuracy is %(rate)s%%; there is room to improve."
+
+msgid "测试总正确率为 %(rate)s%%，需要更多练习。"
+msgstr "Overall test accuracy is %(rate)s%%; more practice may help."
+
+msgid "%(passed)s/%(total)s 次测试通过。"
+msgstr "Passed %(passed)s of %(total)s tests."
+
+msgid "共进行了 %(count)s 次重测，体现了持续学习的意愿。"
+msgstr "Completed %(count)s retests, showing persistence."
+
+msgid "情绪呈上升趋势，整体状态在改善。"
+msgstr "Mood scores have trended upward overall."
+
+msgid "近期情绪有所下降，建议关注学生的心理状态。"
+msgstr "Recent mood scores have declined; consider checking in with the student."
+
+msgid "情绪整体保持稳定。"
+msgstr "Mood scores have remained fairly stable."
+
+msgid "已学习 %(count)s 种技能。"
+msgstr "Practiced %(count)s skills."
+
+msgid "已解锁 %(count)s 个成就。"
+msgstr "Unlocked %(count)s achievements."
+
+msgid "历史风险事件 %(count)s 次，请结合风险事件记录进行综合评估。"
+msgstr "There were %(count)s recorded safety events; review their details in context."
+
+msgid "无风险事件记录。"
+msgstr "No safety events are recorded."
+
+msgid "情绪记录（共1条）"
+msgstr "Mood record (1 total)"
+
+msgid "情绪变化趋势图"
+msgstr "Mood trend chart"
+
+msgid "情绪变化趋势（共%(count)s条记录，1=很差 5=很好）"
+msgstr "Mood trend (%(count)s records; 1 = very bad, 5 = very good)"
+
+msgid "该用户名已被使用，请换一个"
+msgstr "This username is already taken. Please choose another."
+
+msgid "EMA日志已成功提交！"
+msgstr "Your DBT log was submitted."
+
+msgid "心情已记录！"
+msgstr "Mood recorded!"
+
+msgid "教学未完成，无法记录教学后心情。"
+msgstr "Finish the lesson before recording your post-lesson mood."
+
+msgid "已记录过教学后心情。"
+msgstr "Your post-lesson mood has already been recorded."
+
+msgid "教学后心情已记录！"
+msgstr "Post-lesson mood recorded!"
+
+msgid "测试未完成，无法记录测试后心情。"
+msgstr "Finish the test before recording your post-test mood."
+
+msgid "已记录过测试后心情。"
+msgstr "Your post-test mood has already been recorded."
+
+msgid "测试后心情已记录！"
+msgstr "Post-test mood recorded!"
+
+msgid "教学未完成，无法开始测试。"
+msgstr "Finish the lesson before starting a test."
+
+msgid "测试已经结束。"
+msgstr "This test has already ended."
+
+msgid "测试已终止。"
+msgstr "Test ended."
+
+msgid "当前不在心情记录阶段。"
+msgstr "This session is not in the mood-recording stage."
+
+msgid "心情已记录，请和 AI 教练聊聊你最近的情况吧。"
+msgstr "Mood recorded. Tell the AI coach how things have been lately."
+
+msgid "AI 正在生成技能推荐，请勿重复提交。"
+msgstr "The AI is preparing a skill recommendation. Please do not submit again."
+
+msgid "AI 技能推荐暂时不可用，请稍后再试。"
+msgstr "The AI recommendation is temporarily unavailable. Please try again later."
+
+msgid "当前不在个人情况了解阶段。"
+msgstr "This session is not in the personal-inquiry stage."
+
+msgid "请分享一些你最近的经历或感受。"
+msgstr "Please share something about your recent experiences or feelings."
+
+msgid "教学计划正在生成，请勿重复提交。"
+msgstr "The lesson plan is being prepared. Please do not submit again."
+
+msgid "当前不在技能选择阶段。"
+msgstr "This session is not in the skill-selection stage."
+
+msgid "教学计划生成暂时不可用，请稍后再试。"
+msgstr "The lesson plan is temporarily unavailable. Please try again later."
+
+msgid "会话已结束，无法发送消息。"
+msgstr "This session has ended; you cannot send a message."
+
+msgid "消息不能为空。"
+msgstr "Please enter a message."
+
+msgid "AI 教学响应暂时不可用，请稍后再试。"
+msgstr "The AI lesson reply is temporarily unavailable. Please try again later."
+
+msgid "会话已经结束。"
+msgstr "This session has already ended."
+
+msgid "教学已完成，摘要已生成。"
+msgstr "The lesson is complete and its summary was generated."
+
+msgid "教学摘要生成失败，但会话已结束。"
+msgstr "The session ended, but its summary could not be generated."
+
+msgid "教学已终止。"
+msgstr "Lesson ended."
+
+msgid "会话已结束"
+msgstr "Session ended"
+
+msgid "消息包含敏感内容，请重新表述"
+msgstr "This message contains sensitive content. Please rephrase."
+
+msgid "你没有权限访问报告系统。"
+msgstr "You do not have permission to access reports."
+
+msgid "学生不存在。"
+msgstr "Student not found."
+
+msgid "你没有权限访问导出功能。"
+msgstr "You do not have permission to export data."
+
+msgid "题目生成失败，请重试。"
+msgstr "Question generation failed. Please try again."
+
+msgid "正在生成测试题，请稍候..."
+msgstr "Generating questions. Please wait..."
+
+msgid "AI 正在根据教学内容为你出题"
+msgstr "The AI is writing questions based on your lesson."
+
+msgid "测试已结束，无法提交答案。"
+msgstr "This test has ended; you cannot submit an answer."
+
+msgid "缺少题目ID。"
+msgstr "Question ID is missing."
+
+msgid "请选择一个有效选项。"
+msgstr "Please choose a valid option."
+
+msgid "本题已经作答。"
+msgstr "This question has already been answered."
+
+msgid "配图失败，请稍后重试"
+msgstr "Illustration failed. Please try again later."
+
+msgid "无法生成配图：缺少图片描述。"
+msgstr "Cannot generate an illustration: no image description is available."
+
+msgid "无法重试：缺少图片描述。"
+msgstr "Cannot retry: no image description is available."
+
+msgid "配图重试失败，请稍后再试。"
+msgstr "Illustration retry failed. Please try again later."
+
+msgid "暂无配图任务"
+msgstr "No illustration task yet"
+
+msgid "关闭语音"
+msgstr "Stop audio"
+
+msgid "基本信息"
+msgstr "Basic information"
+
+msgid "上传并处理"
+msgstr "Upload and process"
+
+msgid "语音输入"
+msgstr "Voice input"
+
+msgid "元数据"
+msgstr "Metadata"
+
+msgid "悲伤 (Sad)"
+msgstr "Sad"
+
+msgid "焦虑 (Anxious)"
+msgstr "Anxious"
+
+msgid "愤怒 (Angry)"
+msgstr "Angry"
+
+msgid "平静 (Calm)"
+msgstr "Calm"
+
+msgid "希望感 (Hopeful)"
+msgstr "Hopeful"
+
+msgid "痛苦程度"
+msgstr "Distress level"
+
+msgid "自伤冲动"
+msgstr "Self-harm urge"
+
+msgid "自杀冲动"
+msgstr "Suicidal urge"
+
+msgid "正念"
+msgstr "Mindfulness"
+
+msgid "痛苦耐受"
+msgstr "Distress tolerance"
+
+msgid "情绪调节"
+msgstr "Emotion regulation"
+
+msgid "人际效能"
+msgstr "Interpersonal effectiveness"
+
+msgid "请选择至少一项使用的DBT技能。"
+msgstr "Choose at least one DBT skill you used."
+
+msgid "请评价技能使用对你的帮助程度。"
+msgstr "Rate how helpful the skill was."
+
+msgid "请选择1-10之间的分值。"
+msgstr "Choose a score from 1 to 10."
+
+msgid "个人情况了解"
+msgstr "Personal inquiry"
+
+msgid "信息收集"
+msgstr "Gathering information"
+
+msgid "技能选择"
+msgstr "Choosing a skill"
+
+msgid "RAG教学检索"
+msgstr "Retrieving lesson material"
+
+msgid "教学中"
+msgstr "Learning"
+
+msgid "豆包（负载兜底）"
+msgstr "Doubao (fallback)"
+
+msgid "AI 已推荐技能「%(skill)s」，请确认或修改。"
+msgstr "The AI recommended “%(skill)s”. Please confirm or change it."
+
+msgid "AI 已根据你的情况推荐技能「%(skill)s」，请确认或修改。"
+msgstr "Based on what you shared, the AI recommended “%(skill)s”. Please confirm or change it."
+
+msgid "教学计划已生成，开始学习「%(skill)s」。"
+msgstr "Your lesson plan is ready. Let's learn “%(skill)s”."
+
+msgid "🏆 新成就解锁：%(names)s"
+msgstr "🏆 New achievement unlocked: %(names)s"
+
+msgid "测试已创建，正在生成题目（第 %(number)s 次测试）。"
+msgstr "Test created; questions are being generated (attempt %(number)s)."
+
+msgid "还有 %(count)s 题未作答，请完成所有题目。"
+msgstr "You still have %(count)s unanswered questions. Please answer them all."
+
+msgid "恭喜！你通过了测试（%(correct)s/%(total)s）。"
+msgstr "Congratulations! You passed the test (%(correct)s/%(total)s)."
+
+msgid "未通过测试（%(correct)s/%(total)s），需要至少答对 4 题。你可以重测。"
+msgstr "You did not pass (%(correct)s/%(total)s). You need at least four correct answers and may retake the test."
+
+msgid "[系统] 检测到高风险内容，会话已自动中止。如需帮助，请联系专业人士。"
+msgstr "[System] A safety concern was detected and this session has ended. If you need help, contact a trusted adult or a qualified professional."
+
+msgid "停止教学，引导寻求线下帮助"
+msgstr "Stop the lesson and guide the student to in-person help."
+
+msgid "建议关注"
+msgstr "Recommend a check-in."
+
+msgid "AI 风险评估不可用，基于关键词评估"
+msgstr "AI safety assessment is unavailable; this assessment uses keyword signals."
+
+msgid "观察呼吸"
+msgstr "Mindful breathing"
+
+msgid "身体扫描"
+msgstr "Body scan"
+
+msgid "STOP技能"
+msgstr "STOP skill"
+
+msgid "TIP技能"
+msgstr "TIP skill"
+
+msgid "正念练习"
+msgstr "Mindfulness practice"
+
+msgid "你好！在开始之前，我想先了解一下你的近况。"
+msgstr "Hi! Before we begin, I'd like to hear how things have been for you."
+
+msgid "最近一周，有什么事情让你感到开心或者有压力吗？愿意和我聊聊吗？"
+msgstr "In the past week, what has made you feel happy or stressed? Would you like to tell me about it?"
+
+msgid "近期状态"
+msgstr "Recent experiences"
+
+msgid "正念行走"
+msgstr "Mindful walking"
+
+msgid "正念饮食"
+msgstr "Mindful eating"
+
+msgid "正念聆听"
+msgstr "Mindful listening"
+
+msgid "观察-描述-参与"
+msgstr "Observe, describe, participate"
+
+msgid "不评判练习"
+msgstr "Nonjudgmental practice"
+
+msgid "情绪命名"
+msgstr "Naming emotions"
+
+msgid "情绪追踪"
+msgstr "Emotion tracking"
+
+msgid "相反行动"
+msgstr "Opposite action"
+
+msgid "ABC情绪分析"
+msgstr "ABC emotion analysis"
+
+msgid "积累积极情绪"
+msgstr "Building positive emotions"
+
+msgid "事实核查"
+msgstr "Check the facts"
+
+msgid "TIP技能（冷水刺激）"
+msgstr "TIP skill (cold water)"
+
+msgid "转移注意力"
+msgstr "Distraction skills"
+
+msgid "自我安抚"
+msgstr "Self-soothing"
+
+msgid "自我安抚（五感）"
+msgstr "Self-soothing with the five senses"
+
+msgid "接受现实"
+msgstr "Radical acceptance"
+
+msgid "危机生存"
+msgstr "Crisis survival"
+
+msgid "DEAR MAN沟通法"
+msgstr "DEAR MAN communication"
+
+msgid "DEAR MAN"
+msgstr "DEAR MAN"
+
+msgid "GIVE技巧"
+msgstr "GIVE skills"
+
+msgid "GIVE技巧（维护关系）"
+msgstr "GIVE skills (relationships)"
+
+msgid "FAST技巧"
+msgstr "FAST skills"
+
+msgid "FAST技巧（保持自尊）"
+msgstr "FAST skills (self-respect)"
+
+msgid "设置边界"
+msgstr "Setting boundaries"
+
+msgid "请求练习"
+msgstr "Making requests"
+
+msgid "该技能「%(skill)s」历史测试未掌握，需要巩固。"
+msgstr "This skill, “%(skill)s,” was not mastered in a previous test and needs reinforcement."
+
+msgid "模型推荐了近期已学技能但未给出有效复训理由，且无可用备选。"
+msgstr "The model recommended a recently taught skill without a valid reason to repeat it, and no alternative is available."
+
+msgid "原推荐「%(original)s」属于近期已学技能且缺少有效复训理由，已回退为未学备选「%(fallback)s」。"
+msgstr "The original recommendation, “%(original)s,” was taught recently without a valid reason to repeat it, so an untaught alternative, “%(fallback)s,” was chosen."
+
+msgid "复训理由"
+msgstr "Reason for repeating"
+
+msgid "【复训理由】"
+msgstr "(Reason for repeating) "
+
+msgid "重新生成配图"
+msgstr "Regenerate illustration"
+
+msgid "生成的图片"
+msgstr "Generated image"
+
+msgid "模型"
+msgstr "Model"
+
+msgid "请输入图片描述。"
+msgstr "Please enter an image description."
+
+msgid "配图服务繁忙，请稍后再试。"
+msgstr "The illustration service is busy. Please try again shortly."
+
+msgid "图像生成服务未配置，请联系管理员。"
+msgstr "Image generation is not configured. Please contact an administrator."
+
+msgid "图像生成失败，请稍后再试。"
+msgstr "Image generation failed. Please try again shortly."
+
+msgid "图像生成失败：未返回图片。"
+msgstr "Image generation failed: no image was returned."
+
+msgid "文本不能为空"
+msgstr "Text cannot be empty"
+
+msgid "语音服务未配置"
+msgstr "Speech service is not configured"
+
+msgid "语音合成失败"
+msgstr "Speech synthesis failed"
+
+msgid "未能获取音频数据"
+msgstr "Could not retrieve audio data"
+
+msgid "未收到音频数据"
+msgstr "No audio data was received"
+
+msgid "音频数据为空"
+msgstr "Audio data is empty"
+
+msgid "语音识别未配置。请在.env中设置 VOLCENGINE_API_KEY。"
+msgstr "Speech recognition is not configured. Set VOLCENGINE_API_KEY in .env."
+
+msgid "语音识别失败，请稍后再试。"
+msgstr "Speech recognition failed. Please try again shortly."
+
+msgid "排队中，请稍候..."
+msgstr "Queued, please wait..."
+
+msgid "DBT正念技能教学情景配图：%(description)s，温暖插画风格"
+msgstr "Warm illustrated scene for teaching a DBT mindfulness skill: %(description)s"
+
+msgid "切换到深色模式"
+msgstr "Switch to dark mode"
+
+msgid "深色模式"
+msgstr "Dark mode"
+
+msgid "[系统] 教学已完成。摘要：%(summary)s"
+msgstr "[System] Lesson completed. Summary: %(summary)s"
+
+msgid "密码"
+msgstr "Password"
+
+msgid "确认密码"
+msgstr "Confirm password"
+
+msgid "邀请码"
+msgstr "Invitation code"
+
+msgid "该用户名已被使用"
+msgstr "This username is already taken"
+
+msgid "用户名至少需要 3 个字符"
+msgstr "Username must be at least 3 characters long"
+
+msgid "邀请码无效"
+msgstr "Invalid invitation code"
+
+msgid "该邀请码已被使用"
+msgstr "This invitation code has already been used"
+
+msgid "该邀请码已停用"
+msgstr "This invitation code has been disabled"
+
+msgid "两次输入的密码不一致"
+msgstr "The passwords do not match"
+
+msgid "请选择年级"
+msgstr "Select a grade"
+
+msgid "教学后心情记录"
+msgstr "After-lesson mood check-in"
+
+msgid "测试后心情记录"
+msgstr "After-test mood check-in"

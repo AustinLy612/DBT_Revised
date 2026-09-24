@@ -1,6 +1,7 @@
 import csv
 import json
 
+from django.utils.translation import gettext as _
 from django.contrib.admin.views.decorators import staff_member_required
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
@@ -18,7 +19,7 @@ def _is_admin(user):
 def export_page_view(request):
     """Redirect to unified reports + export dashboard."""
     if not _is_admin(request.user):
-        raise PermissionDenied("你没有权限访问导出功能。")
+        raise PermissionDenied(_("你没有权限访问导出功能。"))
     from django.shortcuts import redirect
 
     return redirect("reports:dashboard")
@@ -28,7 +29,7 @@ def export_page_view(request):
 def export_user_json_view(request, user_id):
     """Export a single student's full data as JSON."""
     if not _is_admin(request.user):
-        raise PermissionDenied("你没有权限访问导出功能。")
+        raise PermissionDenied(_("你没有权限访问导出功能。"))
 
     student = get_object_or_404(User, id=user_id)
 
@@ -48,7 +49,7 @@ def export_user_json_view(request, user_id):
 def export_user_csv_view(request, user_id):
     """Export a single student's full data as CSV."""
     if not _is_admin(request.user):
-        raise PermissionDenied("你没有权限访问导出功能。")
+        raise PermissionDenied(_("你没有权限访问导出功能。"))
 
     student = get_object_or_404(User, id=user_id)
 
@@ -68,7 +69,7 @@ def export_user_csv_view(request, user_id):
 def export_users_json_view(request):
     """Export multiple students' data as a single JSON file."""
     if not _is_admin(request.user):
-        raise PermissionDenied("你没有权限访问导出功能。")
+        raise PermissionDenied(_("你没有权限访问导出功能。"))
 
     user_ids = request.GET.getlist("user_ids")
     if not user_ids:
@@ -106,7 +107,7 @@ def export_users_json_view(request):
 def export_users_csv_view(request):
     """Export multiple students' data as a single CSV file."""
     if not _is_admin(request.user):
-        raise PermissionDenied("你没有权限访问导出功能。")
+        raise PermissionDenied(_("你没有权限访问导出功能。"))
 
     user_ids = request.GET.getlist("user_ids")
     if not user_ids:

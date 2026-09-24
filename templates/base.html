@@ -1,10 +1,10 @@
-{% load static %}
+{% load static i18n %}
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="{{ request.LANGUAGE_CODE|default:'zh-hans' }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}DBT 技能教学平台{% endblock %}</title>
+    <title>{% block title %}{% trans "DBT 技能教学平台" %}{% endblock %}</title>
     <script src="{% static 'js/theme.js' %}?v=20260924a"></script>
     <style>
         /* Alpine.js FOUC prevention */
@@ -19,33 +19,43 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/static/django_htmx/htmx.min.js"></script>
     <script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
-    <link rel="stylesheet" href="{% static 'css/design.css' %}?v=20260924c">
+    <link rel="stylesheet" href="{% static 'css/design.css' %}?v=20260924d">
     {% block extra_head %}{% endblock %}
 </head>
 <body class="dbt-app min-h-screen" data-page="{% block page_id %}general{% endblock %}" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
-    <a class="dbt-skip-link" href="#main-content">跳转到主要内容</a>
-    <nav class="dbt-nav" aria-label="主导航">
+    <a class="dbt-skip-link" href="#main-content">{% trans "跳转到主要内容" %}</a>
+    <nav class="dbt-nav" aria-label="{% trans '主导航' %}">
         <div class="dbt-nav-inner">
-            <a href="/" class="dbt-brand">DBT 技能教学平台</a>
+            <a href="/" class="dbt-brand">{% trans "DBT 技能教学平台" %}</a>
             <div class="dbt-nav-links">
                 {% if user.is_authenticated %}
                     {% if user.role == 'student' and user.profile_completed %}
-                    <a href="{% url 'teaching:home' %}">教学</a>
-                    <a href="{% url 'mood:home' %}">心情</a>
-                    <a href="{% url 'ema_log:log' %}">DBT日志</a>
-                    <a href="{% url 'questionnaire:profile' %}">个人问卷</a>
+                    <a href="{% url 'teaching:home' %}">{% trans "教学" %}</a>
+                    <a href="{% url 'mood:home' %}">{% trans "心情" %}</a>
+                    <a href="{% url 'ema_log:log' %}">{% trans "DBT日志" %}</a>
+                    <a href="{% url 'questionnaire:profile' %}">{% trans "个人问卷" %}</a>
                     {% elif user.role == 'report_viewer' %}
-                    <a href="{% url 'reports:dashboard' %}">学生报告</a>
+                    <a href="{% url 'reports:dashboard' %}">{% trans "学生报告" %}</a>
                     {% endif %}
                     <span class="dbt-nav-user">{{ user.username }}</span>
-                    <a href="/accounts/logout/">退出</a>
+                    <a href="/accounts/logout/">{% trans "退出" %}</a>
                 {% else %}
-                    <a href="/accounts/login/">登录</a>
+                    <a href="/accounts/login/">{% trans "登录" %}</a>
                 {% endif %}
             </div>
-            <button class="dbt-theme-toggle" type="button" aria-label="切换到深色模式" title="切换到深色模式">
+            <form class="dbt-language-form" action="{% url 'set_language' %}" method="post">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                <label for="dbt-language">{% trans "语言" %}</label>
+                <select id="dbt-language" name="language" aria-label="{% trans '语言' %}" onchange="this.form.submit()">
+                    <option value="zh-hans" {% if request.LANGUAGE_CODE != 'en' %}selected{% endif %}>中文</option>
+                    <option value="en" {% if request.LANGUAGE_CODE == 'en' %}selected{% endif %}>English</option>
+                </select>
+                <button type="submit" class="dbt-language-submit">{% trans "切换" %}</button>
+            </form>
+            <button class="dbt-theme-toggle" type="button" aria-label="{% trans '切换到深色模式' %}" title="{% trans '切换到深色模式' %}">
                 <span class="dbt-theme-icon" aria-hidden="true">☾</span>
-                <span class="dbt-theme-label">深色模式</span>
+                <span class="dbt-theme-label">{% trans "深色模式" %}</span>
             </button>
         </div>
     </nav>

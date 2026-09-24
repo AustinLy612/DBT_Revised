@@ -1,5 +1,6 @@
 import datetime
 
+from django.utils.translation import gettext as _
 from django.contrib import messages
 from django.shortcuts import redirect, render
 from django.utils import timezone
@@ -27,7 +28,7 @@ def ema_log_view(request):
             submission.user = request.user
             submission.save()
             form.save_m2m()
-            messages.success(request, "EMA日志已成功提交！")
+            messages.success(request, _("EMA日志已成功提交！"))
             return redirect("ema_log:log")
     else:
         form = EMAForm()

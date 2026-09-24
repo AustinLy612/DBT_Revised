@@ -1,5 +1,6 @@
 from django import forms
 from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
 
 from .models import UserProfile
 
@@ -98,20 +99,34 @@ class ProfileForm(forms.ModelForm):
             "other_concern_text": "其他困扰补充",
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            if field.label:
+                field.label = _(str(field.label))
+            if field.widget.attrs.get("placeholder"):
+                field.widget.attrs["placeholder"] = _(str(field.widget.attrs["placeholder"]))
+        for name in ("gender", "grade", "hobby_tags", "concern_tags"):
+            self.fields[name].choices = [
+                (value, _("请选择年级") if name == "grade" and not value else _(str(label)))
+                for value, label in self.fields[name].choices
+                if name != "gender" or value
+            ]
+
     def clean_age(self):
         age = self.cleaned_data["age"]
         if age < 10 or age > 25:
-            raise ValidationError("请输入合理的年龄（10-25 岁）")
+            raise ValidationError(_("请输入合理的年龄（10-25 岁）"))
         return age
 
     def clean_hobby_tags(self):
         tags = self.cleaned_data["hobby_tags"]
         if len(tags) > 5:
-            raise ValidationError("最多选择 5 项爱好")
+            raise ValidationError(_("最多选择 5 项爱好"))
         return tags
 
     def clean_concern_tags(self):
         tags = self.cleaned_data["concern_tags"]
         if len(tags) > 5:
-            raise ValidationError("最多选择 5 项困扰")
+            raise ValidationError(_("最多选择 5 项困扰"))
         return tags

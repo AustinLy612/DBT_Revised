@@ -1,8 +1,9 @@
+{% load i18n localized %}
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="{{ request.LANGUAGE_CODE|default:'zh-hans' }}">
 <head>
 <meta charset="utf-8">
-<title>{{ student.username }} 的个人报告</title>
+<title>{% blocktrans with name=student.username %}{{ name }} 的个人报告{% endblocktrans %}</title>
 <style>
   @page { margin: 2cm; size: A4; }
   body { font-family: "WenQuanYi Micro Hei", "Noto Sans SC", "SimSun", sans-serif; font-size: 11pt; color: #333; line-height: 1.6; }
@@ -35,132 +36,132 @@
 </head>
 <body>
 
-<h1>{{ student.username }} 的个人报告</h1>
+<h1>{% blocktrans with name=student.username %}{{ name }} 的个人报告{% endblocktrans %}</h1>
 
 {# ── Basic Info ── #}
-<h2>基础信息</h2>
+<h2>{% trans "基础信息" %}</h2>
 <div class="info-grid">
-  <div class="info-item"><span class="info-label">用户名：</span>{{ student.username }}</div>
-  <div class="info-item"><span class="info-label">注册时间：</span>{{ student.date_joined|date:"Y-m-d" }}</div>
-  <div class="info-item"><span class="info-label">性别：</span>{{ profile.gender|default:"未填写" }}</div>
-  <div class="info-item"><span class="info-label">年龄：</span>{% if profile.age %}{{ profile.age }} 岁{% else %}未填写{% endif %}</div>
-  <div class="info-item"><span class="info-label">年级：</span>{{ profile.grade|default:"未填写" }}</div>
-  <div class="info-item"><span class="info-label">报告生成时间：</span>{% now "Y-m-d H:i" %}</div>
+  <div class="info-item"><span class="info-label">{% trans "用户名：" %}</span>{{ student.username }}</div>
+  <div class="info-item"><span class="info-label">{% trans "注册时间：" %}</span>{{ student.date_joined|date:"Y-m-d" }}</div>
+  <div class="info-item"><span class="info-label">{% trans "性别：" %}</span>{{ profile.gender|default:"未填写"|localize_label }}</div>
+  <div class="info-item"><span class="info-label">{% trans "年龄：" %}</span>{% if profile.age %}{% blocktrans with age=profile.age %}{{ age }} 岁{% endblocktrans %}{% else %}{% trans "未填写" %}{% endif %}</div>
+  <div class="info-item"><span class="info-label">{% trans "年级：" %}</span>{{ profile.grade|default:"未填写"|localize_label }}</div>
+  <div class="info-item"><span class="info-label">{% trans "报告生成时间：" %}</span>{% now "Y-m-d H:i" %}</div>
 </div>
 {% if profile.hobbies or profile.concerns %}
 <div style="font-size: 10pt; margin-top: 4px;">
   {% if profile.hobbies %}
-  <div style="margin-bottom: 2px;"><span class="info-label">兴趣爱好：</span>{{ profile.hobbies|join:"、" }}{% if profile.other_hobby %}；{{ profile.other_hobby }}{% endif %}</div>
+  <div style="margin-bottom: 2px;"><span class="info-label">{% trans "兴趣爱好：" %}</span>{{ profile.hobbies|localize_list }}{% if profile.other_hobby %}; {{ profile.other_hobby }}{% endif %}</div>
   {% endif %}
   {% if profile.concerns %}
-  <div><span class="info-label">困扰/担忧：</span>{{ profile.concerns|join:"、" }}{% if profile.other_concern %}；{{ profile.other_concern }}{% endif %}</div>
+  <div><span class="info-label">{% trans "困扰/担忧：" %}</span>{{ profile.concerns|localize_list }}{% if profile.other_concern %}; {{ profile.other_concern }}{% endif %}</div>
   {% endif %}
 </div>
 {% endif %}
 
 {# ── Summary ── #}
-<h2>报告摘要</h2>
+<h2>{% trans "报告摘要" %}</h2>
 <div class="summary-box">{{ summary }}</div>
 
 {# ── Overview Cards ── #}
 <div class="overview">
   <div class="overview-card">
     <div class="value">{{ completed_session_count }}</div>
-    <div class="label">完成教学次数</div>
+    <div class="label">{% trans "完成教学次数" %}</div>
   </div>
   <div class="overview-card">
     <div class="value">{{ total_test_count }}</div>
-    <div class="label">测试次数</div>
+    <div class="label">{% trans "测试次数" %}</div>
   </div>
   <div class="overview-card">
     <div class="value">{{ achievements|length }}</div>
-    <div class="label">成就解锁</div>
+    <div class="label">{% trans "成就解锁" %}</div>
   </div>
   <div class="overview-card">
     <div class="value">{% if overall_pass_rate is not None %}{{ overall_pass_rate }}%{% else %}-{% endif %}</div>
-    <div class="label">总正确率</div>
+    <div class="label">{% trans "总正确率" %}</div>
   </div>
 </div>
 
 {# ── Mood Chart ── #}
-<h2>情绪变化</h2>
+<h2>{% trans "情绪变化" %}</h2>
 {% if mood_svg_chart %}
 <div class="mood-chart">{{ mood_svg_chart|safe }}</div>
 {% endif %}
 {% if mood_history %}
 <table>
-  <tr><th>时间</th><th>情绪</th><th>场景</th><th>备注</th></tr>
+  <tr><th>{% trans "时间" %}</th><th>{% trans "情绪" %}</th><th>{% trans "场景" %}</th><th>{% trans "备注" %}</th></tr>
   {% for m in mood_history %}
   <tr>
     <td>{{ m.created_at|date:"Y-m-d H:i" }}</td>
     <td>{{ m.mood_value }}/5</td>
     <td>
-      {% if m.context == 'before_teaching' %}教学前
-      {% elif m.context == 'after_teaching' %}教学后
-      {% elif m.context == 'after_testing' %}测试后
-      {% else %}手动记录{% endif %}
+      {% if m.context == 'before_teaching' %}{% trans "教学前" %}
+      {% elif m.context == 'after_teaching' %}{% trans "教学后" %}
+      {% elif m.context == 'after_testing' %}{% trans "测试后" %}
+      {% else %}{% trans "手动记录" %}{% endif %}
     </td>
     <td>{{ m.note|default:"-" }}</td>
   </tr>
   {% endfor %}
 </table>
 {% else %}
-<p style="color: #9ca3af;">暂无情绪记录</p>
+<p style="color: #9ca3af;">{% trans "暂无情绪记录" %}</p>
 {% endif %}
 
 {# ── Skill Learning ── #}
-<h2>技能学习次数</h2>
+<h2>{% trans "技能学习次数" %}</h2>
 {% if skill_counts %}
 {% for item in skill_counts %}
 <div class="skill-bar">
-  <span style="width: 110px; font-size: 9pt;">{{ item.skill }}</span>
+  <span style="width: 110px; font-size: 9pt;">{{ item.skill|localize_label }}</span>
   <div class="bar"><div class="fill" style="width: {% widthratio item.count skill_counts.0.count 100 %}%"></div></div>
   <span style="width: 18px; text-align: right; font-size: 9pt;">{{ item.count }}</span>
 </div>
 {% endfor %}
 {% else %}
-<p style="color: #9ca3af;">暂无技能学习记录</p>
+<p style="color: #9ca3af;">{% trans "暂无技能学习记录" %}</p>
 {% endif %}
 
 {# ── Test History ── #}
-<h2>测试记录</h2>
+<h2>{% trans "测试记录" %}</h2>
 {% if test_summary %}
 <table>
-  <tr><th>时间</th><th>技能</th><th>成绩</th><th>结果</th><th>重测</th></tr>
+  <tr><th>{% trans "时间" %}</th><th>{% trans "技能" %}</th><th>{% trans "成绩" %}</th><th>{% trans "结果" %}</th><th>{% trans "重测" %}</th></tr>
   {% for t in test_summary %}
   <tr>
     <td>{{ t.created_at|date:"Y-m-d H:i" }}</td>
-    <td>{{ t.session_skill|default:"-" }}</td>
+    <td>{{ t.session_skill|default:"-"|localize_label }}</td>
     <td>{{ t.correct_count }}/{{ t.total_questions }}</td>
     <td>
       {% if t.status == 'completed' %}
-        {% if t.passed %}<span class="tag tag-pass">通过</span>
-        {% else %}<span class="tag tag-fail">未通过</span>{% endif %}
-      {% else %}<span class="tag tag-terminated">已终止</span>{% endif %}
+        {% if t.passed %}<span class="tag tag-pass">{% trans "通过" %}</span>
+        {% else %}<span class="tag tag-fail">{% trans "未通过" %}</span>{% endif %}
+      {% else %}<span class="tag tag-terminated">{% trans "已终止" %}</span>{% endif %}
     </td>
-    <td>{% if t.attempt_no > 1 %}第{{ t.attempt_no }}次{% else %}首次{% endif %}</td>
+    <td>{% if t.attempt_no > 1 %}{% blocktrans with number=t.attempt_no %}第{{ number }}次{% endblocktrans %}{% else %}{% trans "首次" %}{% endif %}</td>
   </tr>
   {% endfor %}
 </table>
 {% if retest_count > 0 %}
-<p style="font-size: 9pt; color: #6b7280;">重测次数：{{ retest_count }} 次</p>
+<p style="font-size: 9pt; color: #6b7280;">{% blocktrans with count=retest_count %}重测次数：{{ count }} 次{% endblocktrans %}</p>
 {% endif %}
 {% else %}
-<p style="color: #9ca3af;">暂无测试记录</p>
+<p style="color: #9ca3af;">{% trans "暂无测试记录" %}</p>
 {% endif %}
 
 {# ── Achievements ── #}
-<h2>成就解锁</h2>
+<h2>{% trans "成就解锁" %}</h2>
 {% if achievements %}
 {% for ua in achievements %}
 <div class="achievement-card">
-  <strong>{{ ua.achievement.name_cn }}</strong>
-  <span style="color: #6b7280; font-size: 9pt;"> — {{ ua.achievement.description_cn }}</span>
-  <span style="color: #9ca3af; font-size: 8pt;">（解锁于 {{ ua.unlocked_at|date:"Y-m-d" }}）</span>
+  <strong>{{ ua.achievement.name_cn|localize_label }}</strong>
+  <span style="color: #6b7280; font-size: 9pt;"> — {{ ua.achievement.description_cn|localize_label }}</span>
+  <span style="color: #9ca3af; font-size: 8pt;">{% blocktrans with date=ua.unlocked_at|date:"Y-m-d" %}（解锁于 {{ date }}）{% endblocktrans %}</span>
 </div>
 {% endfor %}
 {% else %}
-<p style="color: #9ca3af;">暂未解锁成就</p>
+<p style="color: #9ca3af;">{% trans "暂未解锁成就" %}</p>
 {% endif %}
 
 </body>

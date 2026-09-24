@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from http import HTTPStatus
 
+from django.utils.translation import gettext as _
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -63,7 +64,7 @@ def record_mood_view(request: HttpRequest) -> HttpResponse:
     note = request.POST.get("note", "").strip()
 
     services.record_mood(request.user, mood_value, "manual", note=note)
-    messages.success(request, "心情已记录！")
+    messages.success(request, _("心情已记录！"))
     return redirect("mood:home")
 
 
@@ -81,11 +82,11 @@ def record_post_teaching_mood_view(request: HttpRequest, session_id: str) -> Htt
     session = get_object_or_404(TeachingSession, session_id=session_id, user=request.user)
 
     if session.status != TeachingSession.Status.COMPLETED:
-        messages.warning(request, "教学未完成，无法记录教学后心情。")
+        messages.warning(request, _("教学未完成，无法记录教学后心情。"))
         return redirect("teaching:session", session_id=session_id)
 
     if session.post_mood_id:
-        messages.info(request, "已记录过教学后心情。")
+        messages.info(request, _("已记录过教学后心情。"))
         return redirect("teaching:session", session_id=session_id)
 
     if request.method == "GET":
@@ -104,7 +105,7 @@ def record_post_teaching_mood_view(request: HttpRequest, session_id: str) -> Htt
     note = request.POST.get("note", "").strip()
 
     services.record_post_teaching_mood(session, request.user, mood_value, note)
-    messages.success(request, "教学后心情已记录！")
+    messages.success(request, _("教学后心情已记录！"))
     return redirect("teaching:session", session_id=session_id)
 
 
@@ -124,11 +125,11 @@ def record_post_test_mood_view(request: HttpRequest, test_id: str) -> HttpRespon
     test = get_object_or_404(Test, test_id=test_id, user=request.user)
 
     if test.status != Test.Status.COMPLETED:
-        messages.warning(request, "测试未完成，无法记录测试后心情。")
+        messages.warning(request, _("测试未完成，无法记录测试后心情。"))
         return redirect("testing:test", test_id=test_id)
 
     if test.post_mood_id:
-        messages.info(request, "已记录过测试后心情。")
+        messages.info(request, _("已记录过测试后心情。"))
         return redirect("testing:test", test_id=test_id)
 
     if request.method == "GET":
@@ -147,7 +148,7 @@ def record_post_test_mood_view(request: HttpRequest, test_id: str) -> HttpRespon
     note = request.POST.get("note", "").strip()
 
     services.record_post_test_mood(test, request.user, mood_value, note)
-    messages.success(request, "测试后心情已记录！")
+    messages.success(request, _("测试后心情已记录！"))
     return redirect("testing:test", test_id=test_id)
 
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from django.db import models
 from django.utils import timezone
+from django.utils.translation import gettext as _
 
 logger = logging.getLogger("dbt_platform.risk")
 
@@ -19,15 +20,22 @@ HIGH_RISK_KEYWORDS: list[str] = [
     "割腕", "跳楼", "上吊", "安眠药", "结束生命",
     "杀死自己", "伤害自己", "活不下去", "死了算了",
     "去死", "死掉", "不想存在", "消失算了",
+    "suicide", "suicidal", "kill myself", "end my life", "take my life",
+    "hurt myself", "harm myself", "self-harm", "self harm", "cut myself",
+    "overdose", "jump off", "hang myself", "don't want to live",
+    "do not want to live", "want to die", "wish i were dead",
 ]
 
 MODERATE_RISK_KEYWORDS: list[str] = [
     "绝望", "毫无希望", "没有意义", "活着没意义",
     "我想伤害", "我想杀人", "我要杀",
+    "hopeless", "no reason to live", "life is meaningless",
+    "hurt someone", "kill someone", "kill them",
 ]
 
 _MODERATE_CONCERN_INDICATORS: list[str] = [
     "活得没意义", "存在没意义", "我恨我", "讨厌自己", "伤害我",
+    "i hate myself", "hate myself", "nothing matters", "can't go on",
 ]
 
 
@@ -37,11 +45,12 @@ def check_keyword_risk(text: str) -> tuple[bool, list[str]]:
     Returns (is_triggered, keywords_found).
     """
     triggered: list[str] = []
+    normalized = text.casefold()
     for kw in HIGH_RISK_KEYWORDS:
-        if kw in text:
+        if kw.casefold() in normalized:
             triggered.append(kw)
     for kw in MODERATE_RISK_KEYWORDS:
-        if kw in text:
+        if kw.casefold() in normalized:
             triggered.append(kw)
     return bool(triggered), triggered
 
@@ -52,7 +61,8 @@ def has_moderate_concern(text: str) -> bool:
     These are expressions that don't match explicit keyword lists but
     still suggest emotional distress that should be evaluated.
     """
-    return any(ind in text for ind in _MODERATE_CONCERN_INDICATORS)
+    normalized = text.casefold()
+    return any(ind.casefold() in normalized for ind in _MODERATE_CONCERN_INDICATORS)
 
 
 def should_assess_risk(text: str) -> bool:
@@ -118,10 +128,7 @@ def stop_session_for_risk(
         session=session,
         user=user,
         role=ChatMessage.Role.SYSTEM,
-        content=(
-            "[系统] 检测到高风险内容，会话已自动中止。"
-            "如需帮助，请联系专业人士。"
-        ),
+        content=_("[系统] 检测到高风险内容，会话已自动中止。如需帮助，请联系专业人士。"),
     )
     logger.info("Session %s stopped by risk", session.session_id)
 
@@ -174,8 +181,9 @@ def process_risk_check(
     else:
         # AI unavailable — fall back to keyword-only assessment.
         # Conservative: treat any high-risk keyword match as a stop condition.
-        has_high_risk = any(kw in text for kw in HIGH_RISK_KEYWORDS)
-        risk_dict = {"risk_level": "高" if has_high_risk else "中", "should_stop_session": has_high_risk, "follow_up_action": ("停止教学，引导寻求线下帮助" if has_high_risk else "建议关注"), "reasoning": "AI 风险评估不可用，基于关键词评估"}
+        normalized = text.casefold()
+        has_high_risk = any(kw.casefold() in normalized for kw in HIGH_RISK_KEYWORDS)
+        risk_dict = {"risk_level": "高" if has_high_risk else "中", "should_stop_session": has_high_risk, "follow_up_action": (_("停止教学，引导寻求线下帮助") if has_high_risk else _("建议关注")), "reasoning": _("AI 风险评估不可用，基于关键词评估")}
         ai_risk_level = "无"  # AI did not contribute; detection source stays keyword
         should_stop = has_high_risk
 
@@ -251,7 +259,7 @@ def process_test_risk_check(
         # AI unavailable — fall back to keyword-only assessment.
         # Conservative: treat any high-risk keyword match as a stop condition.
         has_high_risk = any(kw in text for kw in HIGH_RISK_KEYWORDS)
-        risk_dict = {"risk_level": "高" if has_high_risk else "中", "should_stop_session": has_high_risk, "follow_up_action": ("停止教学，引导寻求线下帮助" if has_high_risk else "建议关注"), "reasoning": "AI 风险评估不可用，基于关键词评估"}
+        risk_dict = {"risk_level": "高" if has_high_risk else "中", "should_stop_session": has_high_risk, "follow_up_action": (_("停止教学，引导寻求线下帮助") if has_high_risk else _("建议关注")), "reasoning": _("AI 风险评估不可用，基于关键词评估")}
         ai_risk_level = "无"  # AI did not contribute; detection source stays keyword
         should_stop = has_high_risk
 

@@ -18,7 +18,12 @@ Design rules:
 
 from __future__ import annotations
 
+from functools import wraps
 from typing import Any
+
+from django.utils.translation import get_language
+
+from .prompts_en import build_english_messages
 
 # ── Shared constraints injected into system prompts ──
 
@@ -1004,3 +1009,21 @@ def build_risk_assessment_messages(
         {"role": "system", "content": system},
         {"role": "user", "content": user_prompt},
     ]
+
+
+def _localized_builder(flow: str, chinese_builder):
+    @wraps(chinese_builder)
+    def build(*args, **kwargs):
+        if (get_language() or "").lower().startswith("en"):
+            return build_english_messages(flow, **kwargs)
+        return chinese_builder(*args, **kwargs)
+    return build
+
+
+for _flow in (
+    "personal_inquiry", "skill_selection", "teaching_plan", "teaching_content",
+    "teaching_opening", "streaming_teaching", "teaching_summary",
+    "test_questions", "risk_assessment",
+):
+    _name = f"build_{_flow}_messages"
+    globals()[_name] = _localized_builder(_flow, globals()[_name])

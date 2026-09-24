@@ -1,13 +1,14 @@
 {% extends "base.html" %}
-{% block title %}教学会话 - DBT 技能教学平台{% endblock %}
+{% load i18n localized %}
+{% block title %}{% trans "教学会话" %} - {% trans "DBT 技能教学平台" %}{% endblock %}
 {% block page_id %}teaching-session{% endblock %}
 {% block content %}
 <div class="max-w-5xl xl:max-w-6xl mx-auto mt-6">
     <div class="flex items-center justify-between mb-4">
         <div>
-            <a href="{% url 'teaching:home' %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回教学首页</a>
+            <a href="{% url 'teaching:home' %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; {% trans "返回教学首页" %}</a>
             <h1 class="text-xl font-bold text-gray-800 mt-1">
-                {% if session.selected_skill %}{{ session.selected_skill }}{% else %}教学会话{% endif %}
+                {% if session.selected_skill %}{{ session.selected_skill|localize_label }}{% else %}{% trans "教学会话" %}{% endif %}
             </h1>
         </div>
         <span class="text-xs px-2 py-1 rounded">
@@ -16,10 +17,10 @@
                     {% if session.status == 'completed' %}bg-green-100 text-green-700
                     {% elif session.status == 'stopped_by_risk' %}bg-red-100 text-red-700
                     {% else %}bg-gray-100 text-gray-600{% endif %}">
-                    {{ session.get_status_display }}
+                    {{ session.get_status_display|localize_label }}
                 </span>
             {% else %}
-                <span class="px-2 py-1 rounded text-xs bg-blue-100 text-blue-700">{{ session.get_phase_display }}</span>
+                <span class="px-2 py-1 rounded text-xs bg-blue-100 text-blue-700">{{ session.get_phase_display|localize_label }}</span>
             {% endif %}
         </span>
     </div>
@@ -36,47 +37,47 @@
         {# ── Terminal state ── #}
         <div class="bg-white border rounded-lg p-6 mb-4">
             {% if session.status == 'completed' %}
-                <h2 class="text-lg font-semibold text-green-700 mb-3">教学已完成</h2>
+                <h2 class="text-lg font-semibold text-green-700 mb-3">{% trans "教学已完成" %}</h2>
                 {% if session.teaching_summary %}
                 <div class="bg-green-50 rounded p-4 text-sm text-gray-700">
-                    <p class="font-medium text-green-800 mb-1">教学摘要</p>
+                    <p class="font-medium text-green-800 mb-1">{% trans "教学摘要" %}</p>
                     <p>{{ session.teaching_summary }}</p>
                 </div>
                 {% endif %}
                 <div class="mt-3 text-sm text-gray-500">
-                    完成时间：{{ session.completed_at|date:"Y-m-d H:i" }} | 技能：{{ session.selected_skill }}
+                    {% trans "完成时间：" %}{{ session.completed_at|date:"Y-m-d H:i" }} | {% trans "技能：" %}{{ session.selected_skill|localize_label }}
                 </div>
 
                 {% if not session.post_mood_id %}
                 <div class="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
-                    <p class="text-sm text-purple-700 mb-2">教学结束了，记录一下你现在的心情吧。</p>
+                    <p class="text-sm text-purple-700 mb-2">{% trans "教学结束了，记录一下你现在的心情吧。" %}</p>
                     <a href="{% url 'mood:post_teaching' session.session_id %}?next={% url 'teaching:session' session.session_id %}"
-                       class="inline-block text-sm bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition">记录教学后心情</a>
+                       class="inline-block text-sm bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition">{% trans "记录教学后心情" %}</a>
                 </div>
                 {% else %}
-                <div class="mt-3 text-sm text-gray-400">✓ 已记录教学后心情</div>
+                <div class="mt-3 text-sm text-gray-400">{% trans "✓ 已记录教学后心情" %}</div>
                 {% endif %}
             {% elif session.status == 'stopped_by_risk' %}
-                <h2 class="text-lg font-semibold text-red-700 mb-3">⚠ 会话已中止</h2>
-                <p class="text-sm text-gray-700 mb-2">你刚才表达的内容可能表示你正在经历比较危险或难以独自承受的状态。当前教学已暂停。</p>
-                <p class="text-sm text-gray-700 mb-3">请尽快联系身边可信任的成年人，例如学校老师、班主任、学校心理老师、家长或监护人。</p>
+                <h2 class="text-lg font-semibold text-red-700 mb-3">{% trans "⚠ 会话已中止" %}</h2>
+                <p class="text-sm text-gray-700 mb-2">{% trans "你刚才表达的内容可能表示你正在经历比较危险或难以独自承受的状态。当前教学已暂停。" %}</p>
+                <p class="text-sm text-gray-700 mb-3">{% trans "请尽快联系身边可信任的成年人，例如学校老师、班主任、学校心理老师、家长或监护人。" %}</p>
                 <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 text-sm">
-                    <p class="font-medium text-gray-800 mb-1">你也可以拨打以下心理援助热线寻求帮助：</p>
-                    <p class="text-gray-700">全国统一心理援助热线：<span class="font-mono font-bold text-red-700">12356</span></p>
-                    <p class="text-gray-700">北京市心理援助热线：<span class="font-mono font-bold text-red-700">010-82951332</span></p>
-                    <p class="text-xs text-gray-500">座机用户可拨打 <span class="font-mono font-bold">800-810-1117</span></p>
+                    <p class="font-medium text-gray-800 mb-1">{% trans "你也可以拨打以下心理援助热线寻求帮助：" %}</p>
+                    <p class="text-gray-700">{% trans "全国统一心理援助热线：" %}<span class="font-mono font-bold text-red-700">12356</span></p>
+                    <p class="text-gray-700">{% trans "北京市心理援助热线：" %}<span class="font-mono font-bold text-red-700">010-82951332</span></p>
+                    <p class="text-xs text-gray-500">{% trans "座机用户可拨打" %} <span class="font-mono font-bold">800-810-1117</span></p>
                 </div>
-                <p class="text-sm text-red-700 font-medium">如果你正处于立即危险中，请立刻联系身边成年人并寻求当地紧急帮助。</p>
+                <p class="text-sm text-red-700 font-medium">{% trans "如果你正处于立即危险中，请立刻联系身边成年人并寻求当地紧急帮助。" %}</p>
             {% else %}
-                <h2 class="text-lg font-semibold text-gray-600 mb-3">会话已终止</h2>
-                <p class="text-sm text-gray-500">此会话已被手动终止。</p>
+                <h2 class="text-lg font-semibold text-gray-600 mb-3">{% trans "会话已终止" %}</h2>
+                <p class="text-sm text-gray-500">{% trans "此会话已被手动终止。" %}</p>
             {% endif %}
             <div class="mt-4 flex gap-2">
-                <a href="{% url 'teaching:home' %}" class="text-sm text-blue-600 hover:text-blue-800 px-4 py-2 border border-blue-200 rounded-lg">返回教学首页</a>
+                <a href="{% url 'teaching:home' %}" class="text-sm text-blue-600 hover:text-blue-800 px-4 py-2 border border-blue-200 rounded-lg">{% trans "返回教学首页" %}</a>
                 {% if session.status == 'completed' %}
                 <form method="post" action="{% url 'testing:start' session.session_id %}">
                     {% csrf_token %}
-                    <button type="submit" class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">开始测试</button>
+                    <button type="submit" class="text-sm bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">{% trans "开始测试" %}</button>
                 </form>
                 {% endif %}
             </div>
@@ -84,42 +85,42 @@
 
         {% if tests %}
         <div class="bg-white border rounded-lg p-4 mb-4">
-            <h3 class="text-sm font-semibold text-gray-700 mb-3">测试记录</h3>
+            <h3 class="text-sm font-semibold text-gray-700 mb-3">{% trans "测试记录" %}</h3>
             <div class="space-y-3">
                 {% for t in tests %}
                 <div class="border rounded-lg p-3 {% if t.status == 'completed' %}{% if t.passed %}bg-green-50 border-green-200{% else %}bg-yellow-50 border-yellow-200{% endif %}{% elif t.status == 'user_terminated' %}bg-gray-50 border-gray-200{% else %}bg-blue-50 border-blue-200{% endif %}">
                     <div class="flex items-center justify-between mb-2">
                         <div class="flex items-center gap-2">
-                            <span class="text-xs font-medium text-gray-600">第 {{ t.attempt_no }} 次测试</span>
+                            <span class="text-xs font-medium text-gray-600">{% blocktrans with number=t.attempt_no %}第 {{ number }} 次测试{% endblocktrans %}</span>
                             {% if t.status == 'completed' %}
                                 {% if t.passed %}
-                                <span class="text-xs px-1.5 py-0.5 rounded bg-green-200 text-green-800">通过</span>
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-green-200 text-green-800">{% trans "通过" %}</span>
                                 {% else %}
-                                <span class="text-xs px-1.5 py-0.5 rounded bg-yellow-200 text-yellow-800">未通过</span>
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-yellow-200 text-yellow-800">{% trans "未通过" %}</span>
                                 {% endif %}
                             {% elif t.status == 'user_terminated' %}
-                                <span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">已终止</span>
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-600">{% trans "已终止" %}</span>
                             {% else %}
-                                <span class="text-xs px-1.5 py-0.5 rounded bg-blue-200 text-blue-800">进行中</span>
+                                <span class="text-xs px-1.5 py-0.5 rounded bg-blue-200 text-blue-800">{% trans "进行中" %}</span>
                             {% endif %}
                         </div>
                         <span class="text-xs text-gray-400">{{ t.created_at|date:"m-d H:i" }}</span>
                     </div>
                     {% if t.status == 'completed' %}
                     <div class="text-sm text-gray-700">
-                        正确：<span class="font-medium {% if t.passed %}text-green-700{% else %}text-yellow-700{% endif %}">{{ t.correct_count }}/{{ t.total_questions }}</span>
-                        <span class="text-xs text-gray-400 ml-2">（需答对 ≥ 4 题通过）</span>
+                        {% trans "正确：" %}<span class="font-medium {% if t.passed %}text-green-700{% else %}text-yellow-700{% endif %}">{{ t.correct_count }}/{{ t.total_questions }}</span>
+                        <span class="text-xs text-gray-400 ml-2">{% trans "（需答对 ≥ 4 题通过）" %}</span>
                     </div>
                     {% endif %}
                     {% if t.status == 'completed' or t.status == 'ongoing' %}
                     <a href="{% url 'testing:test' t.test_id %}" class="inline-block mt-2 text-xs text-blue-600 hover:text-blue-800">
-                        {% if t.status == 'completed' %}查看详情{% else %}继续答题 →{% endif %}
+                        {% if t.status == 'completed' %}{% trans "查看详情" %}{% else %}{% trans "继续答题 →" %}{% endif %}
                     </a>
                     {% endif %}
                     {% if t.status == 'completed' and not t.passed %}
                     <form method="post" action="{% url 'testing:retest' t.test_id %}" class="inline ml-2">
                         {% csrf_token %}
-                        <button type="submit" class="text-xs text-orange-600 hover:text-orange-800">重新测试</button>
+                        <button type="submit" class="text-xs text-orange-600 hover:text-orange-800">{% trans "重新测试" %}</button>
                     </form>
                     {% endif %}
                 </div>
@@ -130,7 +131,7 @@
 
         {% if conversation %}
         <div class="bg-white border rounded-lg p-4">
-            <h3 class="text-sm font-semibold text-gray-500 mb-3">对话记录</h3>
+            <h3 class="text-sm font-semibold text-gray-500 mb-3">{% trans "对话记录" %}</h3>
             <div class="h-[450px] overflow-y-auto space-y-3" id="chat-messages">
                 {% for m in conversation %}
                 <div class="flex {% if m.role == 'user' %}justify-end{% else %}justify-start{% endif %}"
@@ -141,11 +142,11 @@
                         <button onclick="DBT_TTS.play('{{ m.content|escapejs }}', '{{ m.message_id }}')"
                                 id="tts-btn-{{ m.message_id }}"
                                 class="ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom"
-                                title="语音播报">🔊</button>
+                                title="{% trans '语音播报' %}">🔊</button>
                         {% endif %}
                         {% if m.image_url %}
                         <div class="mt-2 flex justify-center">
-                            <img src="{{ m.image_url }}" alt="教学配图" loading="lazy"
+                            <img src="{{ m.image_url }}" alt="{% trans '教学配图' %}" loading="lazy"
                                  class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">
                         </div>
                         {% elif m.image_prompt and m.role == 'assistant' %}
@@ -153,7 +154,7 @@
                              hx-trigger="load, every 3s" hx-swap="outerHTML">
                             <div class="p-3 bg-purple-50 border border-purple-200 rounded-lg text-center">
                                 <div class="inline-block w-4 h-4 border-2 border-purple-200 border-t-purple-500 rounded-full animate-spin"></div>
-                                <span class="text-xs text-purple-600 ml-2">情景配图生成中...</span>
+                                <span class="text-xs text-purple-600 ml-2">{% trans "情景配图生成中..." %}</span>
                             </div>
                         </div>
                         {% endif %}
@@ -164,11 +165,11 @@
             <div id="audio-player-bar" class="hidden bg-blue-50 border-t border-blue-200 px-4 py-2.5 flex items-center justify-between">
                 <div class="flex items-center gap-2">
                     <span class="text-blue-500 text-sm">🔊</span>
-                    <span id="audio-bar-status" class="text-sm text-gray-700">正在播放语音...</span>
+                    <span id="audio-bar-status" class="text-sm text-gray-700">{% trans "正在播放语音..." %}</span>
                 </div>
                 <button onclick="DBT_TTS.stop()"
                         class="text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full w-7 h-7 flex items-center justify-center transition text-lg leading-none"
-                        title="关闭语音">✕</button>
+                        title="{% trans '关闭语音' %}">✕</button>
             </div>
         </div>
         {% endif %}
@@ -176,8 +177,8 @@
     {% elif session.phase == 'pre_mood_recording' %}
         {# ── Pre-Mood Recording Phase ── #}
         <div class="bg-white border rounded-lg p-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-2">教学前心情记录</h2>
-            <p class="text-sm text-gray-500 mb-6">在开始教学前，先记录一下你现在的心情吧。</p>
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">{% trans "教学前心情记录" %}</h2>
+            <p class="text-sm text-gray-500 mb-6">{% trans "在开始教学前，先记录一下你现在的心情吧。" %}</p>
 
             <form method="post" action="{% url 'teaching:record_pre_mood' session.session_id %}">
                 {% csrf_token %}
@@ -196,23 +197,23 @@
                             {% endif %}
                         </div>
                         <span class="text-xs text-gray-500 mt-1 block">
-                            {% if forloop.counter == 1 %}很差
-                            {% elif forloop.counter == 2 %}不好
-                            {% elif forloop.counter == 3 %}一般
-                            {% elif forloop.counter == 4 %}不错
-                            {% else %}很好
+                            {% if forloop.counter == 1 %}{% trans "很差" %}
+                            {% elif forloop.counter == 2 %}{% trans "不好" %}
+                            {% elif forloop.counter == 3 %}{% trans "一般" %}
+                            {% elif forloop.counter == 4 %}{% trans "不错" %}
+                            {% else %}{% trans "很好" %}
                             {% endif %}
                         </span>
                     </label>
                     {% endfor %}
                 </div>
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-600 mb-1">备注（可选）</label>
-                    <input type="text" name="note" placeholder="有什么想记录的吗？"
+                    <label class="block text-sm font-medium text-gray-600 mb-1">{% trans "备注（可选）" %}</label>
+                    <input type="text" name="note" placeholder="{% trans '有什么想记录的吗？' %}"
                            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
                 </div>
                 <button type="submit" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">
-                    确认并开始
+                    {% trans "确认并开始" %}
                 </button>
             </form>
         </div>
@@ -220,8 +221,8 @@
     {% elif session.phase == 'personal_inquiry' %}
         {# ── Personal Inquiry Phase ── #}
         <div class="bg-white border rounded-lg p-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-2">在开始之前，先聊聊你最近的情况</h2>
-            <p class="text-sm text-gray-500 mb-4">了解你最近的经历和感受，才能为你推荐最适合的技能。</p>
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">{% trans "在开始之前，先聊聊你最近的情况" %}</h2>
+            <p class="text-sm text-gray-500 mb-4">{% trans "了解你最近的经历和感受，才能为你推荐最适合的技能。" %}</p>
 
             {% if inquiry_data %}
             <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-5">
@@ -233,33 +234,33 @@
             <form method="post" action="{% url 'teaching:personal_inquiry' session.session_id %}">
                 {% csrf_token %}
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-600 mb-1">你的分享</label>
+                    <label class="block text-sm font-medium text-gray-600 mb-1">{% trans "你的分享" %}</label>
                     <textarea name="personal_context" rows="4" autofocus
-                              placeholder="分享你最近的经历、感受或任何想说的..."
+                              placeholder="{% trans '分享你最近的经历、感受或任何想说的...' %}"
                               class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-200 focus:border-green-500 resize-none"></textarea>
-                    <p class="text-xs text-gray-400 mt-1">你可以分享任何事情——最近的心情变化、让你开心或困扰的事、学业或人际关系方面的感受。分享得越多，AI 越能为你推荐合适的技能。</p>
+                    <p class="text-xs text-gray-400 mt-1">{% trans "你可以分享任何事情——最近的心情变化、让你开心或困扰的事、学业或人际关系方面的感受。分享得越多，AI 越能为你推荐合适的技能。" %}</p>
                 </div>
                 <button type="submit" class="w-full bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition">
-                    分享并开始推荐
+                    {% trans "分享并开始推荐" %}
                 </button>
             </form>
 
             <div class="mt-4 text-xs text-gray-400 text-center">
-                <p>你的分享仅用于本次教学推荐，不会被其他人看到。</p>
+                <p>{% trans "你的分享仅用于本次教学推荐，不会被其他人看到。" %}</p>
             </div>
         </div>
 
     {% elif session.phase == 'info_collection' %}
         {# ── Info Collection Phase (error recovery / retry) ── #}
         <div class="bg-white border rounded-lg p-6 text-center">
-            <h2 class="text-lg font-semibold text-gray-800 mb-2">正在收集你的学习信息</h2>
-            <p class="text-sm text-gray-500 mb-4">正在读取你的问卷信息、学习历史和测试记录...</p>
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">{% trans "正在收集你的学习信息" %}</h2>
+            <p class="text-sm text-gray-500 mb-4">{% trans "正在读取你的问卷信息、学习历史和测试记录..." %}</p>
             <form method="post" action="{% url 'teaching:record_pre_mood' session.session_id %}">
                 {% csrf_token %}
                 <input type="hidden" name="mood_value" value="3">
                 <input type="hidden" name="auto_continue" value="1">
                 <button type="submit" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">
-                    重试
+                    {% trans "重试" %}
                 </button>
             </form>
         </div>
@@ -267,13 +268,13 @@
     {% elif session.phase == 'skill_selection' %}
         {# ── Skill Selection Phase ── #}
         <div class="bg-white border rounded-lg p-6">
-            <h2 class="text-lg font-semibold text-gray-800 mb-2">AI 技能推荐</h2>
-            <p class="text-sm text-gray-500 mb-4">基于你的问卷信息和学习历史，AI 推荐以下技能：</p>
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">{% trans "AI 技能推荐" %}</h2>
+            <p class="text-sm text-gray-500 mb-4">{% trans "基于你的问卷信息和学习历史，AI 推荐以下技能：" %}</p>
 
             <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-5">
                 <div class="flex items-center gap-2 mb-2">
-                    <span class="text-lg font-bold text-blue-800">{{ session.selected_skill }}</span>
-                    {% if session.selected_module %}<span class="text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded">{{ session.selected_module }}</span>{% endif %}
+                    <span class="text-lg font-bold text-blue-800">{{ session.selected_skill|localize_label }}</span>
+                    {% if session.selected_module %}<span class="text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded">{{ session.selected_module|localize_label }}</span>{% endif %}
                 </div>
                 {% if session.selection_reason %}
                 <p class="text-sm text-blue-700">{{ session.selection_reason }}</p>
@@ -283,12 +284,12 @@
             <form method="post" action="{% url 'teaching:confirm_skill' session.session_id %}">
                 {% csrf_token %}
                 <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-600 mb-1">或者输入你想学习的技能：</label>
-                    <input type="text" name="custom_skill" placeholder="留空则使用 AI 推荐"
+                    <label class="block text-sm font-medium text-gray-600 mb-1">{% trans "或者输入你想学习的技能：" %}</label>
+                    <input type="text" name="custom_skill" placeholder="{% trans '留空则使用 AI 推荐' %}"
                            class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
                 </div>
                 <button type="submit" class="w-full bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">
-                    确认并开始教学
+                    {% trans "确认并开始教学" %}
                 </button>
             </form>
         </div>
@@ -296,10 +297,10 @@
     {% elif session.phase == 'rag_retrieval_for_teaching' %}
         {# ── RAG Retrieval Phase (another request owns plan generation) ── #}
         <div class="bg-white border rounded-lg p-6 text-center">
-            <h2 class="text-lg font-semibold text-gray-800 mb-2">正在准备教学资料</h2>
-            <p class="text-sm text-gray-500 mb-4">正在为「{{ session.selected_skill }}」生成教学计划，请勿重复提交。</p>
-            <div class="animate-pulse text-blue-500 text-sm">检索中...</div>
-            <p class="mt-3 text-xs text-gray-400">页面将在几秒后自动刷新。</p>
+            <h2 class="text-lg font-semibold text-gray-800 mb-2">{% trans "正在准备教学资料" %}</h2>
+            <p class="text-sm text-gray-500 mb-4">{% blocktrans with skill=session.selected_skill|localize_label %}正在为「{{ skill }}」生成教学计划，请勿重复提交。{% endblocktrans %}</p>
+            <div class="animate-pulse text-blue-500 text-sm">{% trans "检索中..." %}</div>
+            <p class="mt-3 text-xs text-gray-400">{% trans "页面将在几秒后自动刷新。" %}</p>
         </div>
         <script>
             window.setTimeout(function () { window.location.reload(); }, 3000);
@@ -310,7 +311,7 @@
         <div class="grid grid-cols-4 gap-4">
             <div class="col-span-1">
                 <div class="bg-white border rounded-lg p-4 sticky top-4">
-                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">教学计划</h3>
+                    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">{% trans "教学计划" %}</h3>
                     {% if plan_steps %}
                     <ol class="space-y-2">
                         {% for step in plan_steps %}
@@ -322,30 +323,32 @@
                         {% endfor %}
                     </ol>
                     {% else %}
-                    <p class="text-xs text-gray-400">无教学计划</p>
+                    <p class="text-xs text-gray-400">{% trans "无教学计划" %}</p>
                     {% endif %}
 
                     {# Image generation for teaching scene #}
                     <div class="mt-4 pt-4 border-t">
-                        <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">情景配图</h3>
+                        <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{% trans "情景配图" %}</h3>
                         <div id="teaching-image-area"></div>
-                        <button onclick="DBT_Image.generateScene('{{ session.session_id }}', 'DBT技能教学情景图：{{ session.selected_skill|default:'正念练习'|escapejs }}', 'teaching-image-area')"
+                        {% trans "DBT技能教学情景图：" as scene_prompt %}
+                        <button onclick="DBT_Image.generateScene('{{ session.session_id }}', '{{ scene_prompt|escapejs }} {{ session.selected_skill|default:'正念练习'|localize_label|escapejs }}', 'teaching-image-area')"
                                 class="mt-2 w-full text-xs bg-purple-50 text-purple-600 px-3 py-1.5 rounded hover:bg-purple-100 transition">
-                            🎨 生成教学配图
+                            {% trans "🎨 生成教学配图" %}
                         </button>
                     </div>
                 </div>
             </div>
 
             <div class="col-span-3">
-                <div class="bg-white border rounded-lg">
+                <div class="bg-white border rounded-lg overflow-hidden">
                     <div class="p-4 border-b bg-gray-50 flex items-center justify-between">
-                        <span class="text-sm font-medium text-gray-700">教学对话</span>
-                        <label class="flex items-center gap-1.5 cursor-pointer select-none" title="AI回复后自动语音播报">
-                            <span class="text-xs text-gray-400" id="tts-autoplay-label">已关闭</span>
+                        <span class="text-sm font-medium text-gray-700">{% trans "教学对话" %}</span>
+                        <label class="flex items-center gap-1.5 cursor-pointer select-none" title="{% trans 'AI回复后自动语音播报' %}">
+                            <span class="text-xs text-gray-400" id="tts-autoplay-label">{% trans "已关闭" %}</span>
                             <input type="checkbox" id="tts-autoplay-toggle"
                                    class="sr-only peer"
-                                   onchange="var on=DBT_TTS.toggleAutoPlay();document.getElementById('tts-autoplay-label').textContent=on?'自动播报':'已关闭'">
+                                   onchange="var on=DBT_TTS.toggleAutoPlay();document.getElementById('tts-autoplay-label').textContent=on?this.dataset.on:this.dataset.off"
+                                   data-on="{% trans '自动播报' %}" data-off="{% trans '已关闭' %}">
                             <div class="w-8 h-4 bg-gray-300 rounded-full peer-checked:bg-blue-500 transition relative">
                                 <div class="w-3 h-3 bg-white rounded-full absolute top-0.5 left-0.5 transition peer-checked:translate-x-4"></div>
                             </div>
@@ -361,11 +364,11 @@
                                 <button onclick="DBT_TTS.play('{{ m.content|escapejs }}', '{{ m.message_id }}')"
                                         id="tts-btn-{{ m.message_id }}"
                                         class="ml-2 text-xs text-gray-400 hover:text-blue-500 align-bottom"
-                                        title="语音播报">🔊</button>
+                                        title="{% trans '语音播报' %}">🔊</button>
                                 {% endif %}
                                 {% if m.image_url %}
                                 <div class="mt-2 flex justify-center">
-                                    <img src="{{ m.image_url }}" alt="教学配图" loading="lazy"
+                                    <img src="{{ m.image_url }}" alt="{% trans '教学配图' %}" loading="lazy"
                                          class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">
                                 </div>
                                 {% elif m.image_prompt and m.role == 'assistant' %}
@@ -373,7 +376,7 @@
                                      hx-trigger="load, every 3s" hx-swap="outerHTML">
                                     <div class="p-3 bg-purple-50 border border-purple-200 rounded-lg text-center">
                                         <div class="inline-block w-4 h-4 border-2 border-purple-200 border-t-purple-500 rounded-full animate-spin"></div>
-                                        <span class="text-xs text-purple-600 ml-2">情景配图生成中...</span>
+                                        <span class="text-xs text-purple-600 ml-2">{% trans "情景配图生成中..." %}</span>
                                     </div>
                                 </div>
                                 {% endif %}
@@ -385,11 +388,11 @@
                     <div id="audio-player-bar" class="hidden bg-blue-50 border-t border-blue-200 px-4 py-2.5 flex items-center justify-between">
                         <div class="flex items-center gap-2">
                             <span class="text-blue-500 text-sm">🔊</span>
-                            <span id="audio-bar-status" class="text-sm text-gray-700">正在播放语音...</span>
+                            <span id="audio-bar-status" class="text-sm text-gray-700">{% trans "正在播放语音..." %}</span>
                         </div>
                         <button onclick="DBT_TTS.stop()"
                                 class="text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full w-7 h-7 flex items-center justify-center transition text-lg leading-none"
-                                title="关闭语音">✕</button>
+                                title="{% trans '关闭语音' %}">✕</button>
                     </div>
 
                     <div class="border-t p-3">
@@ -397,32 +400,33 @@
                               class="flex gap-2">
                             {% csrf_token %}
                             <input type="text" name="message" autofocus autocomplete="off" id="chat-input"
-                                   placeholder="输入你的想法或问题..."
+                                   placeholder="{% trans '输入你的想法或问题...' %}"
                                    class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400">
                             <button type="button" id="mic-btn"
-                                    onclick="if(DBT_ASR.isRecording()){DBT_ASR.stop();this.textContent='🎤';this.classList.remove('bg-red-500');this.classList.add('bg-gray-100');document.getElementById('asr-status').textContent=''}else{DBT_ASR.start(function(){document.getElementById('mic-btn').textContent='⏹';document.getElementById('mic-btn').classList.add('bg-red-500');document.getElementById('mic-btn').classList.remove('bg-gray-100')},function(err){var s=document.getElementById('asr-status');if(s&&s.textContent.indexOf('✗')===-1)s.textContent='✗ 语音输入失败'})}"
+                                    onclick="if(DBT_ASR.isRecording()){DBT_ASR.stop();this.textContent='🎤';this.classList.remove('bg-red-500');this.classList.add('bg-gray-100');document.getElementById('asr-status').textContent=''}else{DBT_ASR.start(function(){document.getElementById('mic-btn').textContent='⏹';document.getElementById('mic-btn').classList.add('bg-red-500');document.getElementById('mic-btn').classList.remove('bg-gray-100')},function(err){var s=document.getElementById('asr-status');if(s&&s.textContent.indexOf('✗')===-1)s.textContent=s.dataset.error})}"
+                                    data-error="✗ {% trans '语音输入失败' %}"
                                     class="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-200 transition text-sm flex-shrink-0"
-                                    title="语音输入">🎤</button>
+                                    title="{% trans '语音输入' %}">🎤</button>
                             <button type="submit" id="send-btn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition text-sm">
-                                发送
+                                {% trans "发送" %}
                             </button>
                         </form>
                         <div id="sending-indicator" class="mt-1" style="display:none">
                             <div class="skeleton h-5 w-3/4 mb-1"></div>
                             <div class="skeleton h-5 w-1/2"></div>
-                            <span class="text-xs text-gray-400">AI 正在思考...</span>
+                            <span class="text-xs text-gray-400">{% trans "AI 正在思考..." %}</span>
                         </div>
                         <div id="asr-status" class="text-xs text-gray-400 mt-1"></div>
                         <div class="flex justify-end mt-2 gap-2">
                             <form method="post" action="{% url 'teaching:end_session' session.session_id %}"
-                                  onsubmit="return confirm('确定要结束本次教学吗？')">
+                                  onsubmit="return confirm(this.dataset.confirm)" data-confirm="{% trans '确定要结束本次教学吗？' %}">
                                 {% csrf_token %}
-                                <button type="submit" class="text-xs text-green-600 hover:text-green-800 px-2 py-1">结束教学</button>
+                                <button type="submit" class="text-xs text-green-600 hover:text-green-800 px-2 py-1">{% trans "结束教学" %}</button>
                             </form>
                             <form method="post" action="{% url 'teaching:terminate' session.session_id %}"
-                                  onsubmit="return confirm('确定要终止本次教学吗？')">
+                                  onsubmit="return confirm(this.dataset.confirm)" data-confirm="{% trans '确定要终止本次教学吗？' %}">
                                 {% csrf_token %}
-                                <button type="submit" class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">终止会话</button>
+                                <button type="submit" class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">{% trans "终止会话" %}</button>
                             </form>
                         </div>
                     </div>

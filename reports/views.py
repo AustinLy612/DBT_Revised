@@ -1,3 +1,4 @@
+from django.utils.translation import gettext as _
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponse
@@ -10,7 +11,7 @@ def dashboard_view(request):
     user = request.user
 
     if user.role not in ("report_viewer", "admin"):
-        raise PermissionDenied("你没有权限访问报告系统。")
+        raise PermissionDenied(_("你没有权限访问报告系统。"))
 
     from accounts.models import User
 
@@ -29,14 +30,14 @@ def student_report_view(request, student_id):
     user = request.user
 
     if user.role not in ("report_viewer", "admin"):
-        raise PermissionDenied("你没有权限访问报告系统。")
+        raise PermissionDenied(_("你没有权限访问报告系统。"))
 
     from accounts.models import User
 
     try:
         student = User.objects.get(id=student_id)
     except User.DoesNotExist:
-        raise PermissionDenied("学生不存在。")
+        raise PermissionDenied(_("学生不存在。"))
 
     from .services import get_student_report_data
 
@@ -57,7 +58,7 @@ def student_report_pdf_view(request, student_id):
     user = request.user
 
     if user.role not in ("report_viewer", "admin"):
-        raise PermissionDenied("你没有权限访问报告系统。")
+        raise PermissionDenied(_("你没有权限访问报告系统。"))
 
     from accounts.models import User
 

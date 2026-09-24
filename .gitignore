@@ -23,6 +23,8 @@ build/
 # Docker
 docker/certs/
 docker/aliyun-credentials.ini
+celerybeat-schedule
+celerybeat-schedule.*
 
 # Local model / embedding cache (do not commit)
 /models/

@@ -1,16 +1,17 @@
 {% extends "base.html" %}
+{% load i18n localized %}
 {% load test_filters %}
-{% block title %}测试 - DBT 技能教学平台{% endblock %}
+{% block title %}{% trans "测试" %} - {% trans "DBT 技能教学平台" %}{% endblock %}
 {% block page_id %}testing{% endblock %}
 {% block content %}
 <div class="max-w-3xl mx-auto mt-6">
     <div class="flex items-center justify-between mb-4">
         <div>
-            <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; 返回教学会话</a>
+            <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-gray-500 hover:text-gray-700">&larr; {% trans "返回教学会话" %}</a>
             <h1 class="text-xl font-bold text-gray-800 mt-1">
-                测试：{{ session.selected_skill|default:"技能" }}
+                {% trans "测试：" %}{{ session.selected_skill|default:"技能"|localize_label }}
                 {% if test.attempt_no > 1 %}
-                <span class="text-sm font-normal text-gray-500">（第 {{ test.attempt_no }} 次）</span>
+                <span class="text-sm font-normal text-gray-500">{% blocktrans with number=test.attempt_no %}（第 {{ number }} 次）{% endblocktrans %}</span>
                 {% endif %}
             </h1>
         </div>
@@ -18,7 +19,7 @@
             {% if test.status == 'completed' %}bg-green-100 text-green-700
             {% elif test.status == 'user_terminated' %}bg-gray-100 text-gray-600
             {% else %}bg-blue-100 text-blue-700{% endif %}">
-            {{ test.get_status_display }}
+            {{ test.get_status_display|localize_label }}
         </span>
     </div>
 
@@ -34,42 +35,42 @@
     {% if is_completed and result_data %}
     <div class="bg-white border rounded-lg p-6 mb-4">
         <h2 class="text-lg font-semibold mb-3 {% if result_data.passed %}text-green-700{% else %}text-orange-700{% endif %}">
-            {% if result_data.passed %}🎉 测试通过！{% else %}测试未通过{% endif %}
+            {% if result_data.passed %}🎉 {% trans "测试通过！" %}{% else %}{% trans "测试未通过" %}{% endif %}
         </h2>
         <div class="grid grid-cols-3 gap-4 mb-4">
             <div class="bg-gray-50 rounded p-3 text-center">
                 <div class="text-2xl font-bold text-gray-800">{{ result_data.correct_count }}/{{ result_data.total_questions }}</div>
-                <div class="text-xs text-gray-500 mt-1">正确率</div>
+                <div class="text-xs text-gray-500 mt-1">{% trans "正确率" %}</div>
             </div>
             <div class="bg-gray-50 rounded p-3 text-center">
                 <div class="text-2xl font-bold {% if result_data.passed %}text-green-600{% else %}text-orange-600{% endif %}">
-                    {% if result_data.passed %}通过{% else %}未通过{% endif %}
+                    {% if result_data.passed %}{% trans "通过" %}{% else %}{% trans "未通过" %}{% endif %}
                 </div>
-                <div class="text-xs text-gray-500 mt-1">需答对 ≥ 4 题</div>
+                <div class="text-xs text-gray-500 mt-1">{% trans "需答对 ≥ 4 题" %}</div>
             </div>
             <div class="bg-gray-50 rounded p-3 text-center">
                 <div class="text-2xl font-bold text-gray-800">{{ result_data.attempt_no }}</div>
-                <div class="text-xs text-gray-500 mt-1">第几次测试</div>
+                <div class="text-xs text-gray-500 mt-1">{% trans "第几次测试" %}</div>
             </div>
         </div>
         <div class="flex gap-2">
             <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-blue-600 hover:text-blue-800 px-4 py-2 border border-blue-200 rounded-lg">
-                返回教学会话
+                {% trans "返回教学会话" %}
             </a>
             {% if not result_data.passed %}
             <form method="post" action="{% url 'testing:retest' test.test_id %}">
                 {% csrf_token %}
                 <button type="submit" class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">
-                    重新测试
+                    {% trans "重新测试" %}
                 </button>
             </form>
             {% endif %}
         </div>
 
         <div class="mt-4 bg-purple-50 border border-purple-200 rounded-lg p-4">
-            <p class="text-sm text-purple-700 mb-2">测试结束了，记录一下你现在的心情吧。</p>
+            <p class="text-sm text-purple-700 mb-2">{% trans "测试结束了，记录一下你现在的心情吧。" %}</p>
             <a href="{% url 'mood:post_test' test.test_id %}"
-               class="inline-block text-sm bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition">记录测试后心情</a>
+               class="inline-block text-sm bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition">{% trans "记录测试后心情" %}</a>
         </div>
     </div>
     {% endif %}
@@ -77,32 +78,32 @@
     {# ── Terminated ── #}
     {% if is_terminated %}
     <div class="bg-white border rounded-lg p-6 mb-4 text-center">
-        <h2 class="text-lg font-semibold text-gray-600 mb-2">测试已终止</h2>
-        <p class="text-sm text-gray-500 mb-4">此测试已被手动终止。</p>
-        <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-blue-600 hover:text-blue-800">返回教学会话</a>
+        <h2 class="text-lg font-semibold text-gray-600 mb-2">{% trans "测试已终止" %}</h2>
+        <p class="text-sm text-gray-500 mb-4">{% trans "此测试已被手动终止。" %}</p>
+        <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-blue-600 hover:text-blue-800">{% trans "返回教学会话" %}</a>
     </div>
     {% endif %}
 
     {# ── Question review (completed or terminated with questions) ── #}
     {% if is_completed or is_terminated %}
     <div class="bg-white border rounded-lg p-4 mb-4">
-        <h3 class="text-sm font-semibold text-gray-500 mb-3">题目回顾</h3>
+        <h3 class="text-sm font-semibold text-gray-500 mb-3">{% trans "题目回顾" %}</h3>
         <div class="space-y-4">
             {% for q in questions %}
             <div class="border rounded-lg p-4 {% if q.is_correct %}border-green-200 bg-green-50{% elif q.user_answer %}border-red-200 bg-red-50{% else %}border-gray-200{% endif %}">
                 <div class="flex items-start justify-between mb-2">
                     <div class="flex-1">
-                        <span class="text-sm font-medium text-gray-800">第 {{ forloop.counter }} 题</span>
+                        <span class="text-sm font-medium text-gray-800">{% blocktrans with number=forloop.counter %}第 {{ number }} 题{% endblocktrans %}</span>
                         <span class="text-xs ml-2 {% if q.is_correct %}text-green-600{% elif q.user_answer %}text-red-600{% else %}text-gray-400{% endif %}">
-                            {% if q.is_correct %}✓ 正确{% elif q.user_answer %}✗ 错误{% else %}未作答{% endif %}
+                            {% if q.is_correct %}✓ {% trans "正确" %}{% elif q.user_answer %}✗ {% trans "错误" %}{% else %}{% trans "未作答" %}{% endif %}
                         </span>
                     </div>
                 </div>
                 <p class="text-sm text-gray-800 mb-3">{{ q.question_text }}</p>
                 {% if q.temporary_image_url %}
                 <div class="mb-3">
-                    <img src="{{ q.temporary_image_url }}" alt="题目配图" class="w-full max-w-md rounded-lg shadow" loading="lazy">
-                    <p class="text-xs text-gray-400 mt-1">模型: {{ q.image_model|default:"image-01" }}</p>
+                    <img src="{{ q.temporary_image_url }}" alt="{% trans '题目配图' %}" class="w-full max-w-md rounded-lg shadow" loading="lazy">
+                    <p class="text-xs text-gray-400 mt-1">{% trans "模型:" %} {{ q.image_model|default:"image-01" }}</p>
                 </div>
                 {% elif q.image_prompt %}
                 <div class="mb-3 p-3 bg-purple-50 border border-purple-200 rounded-lg text-center"
@@ -111,7 +112,7 @@
                             hx-target="#review-image-area-{{ q.question_id }}"
                             hx-swap="outerHTML"
                             class="text-xs text-purple-500 hover:text-purple-700 underline">
-                        🖼 生成配图
+                        {% trans "🖼 生成配图" %}
                     </button>
                 </div>
                 {% else %}
@@ -121,7 +122,7 @@
                             hx-target="#review-image-area-{{ q.question_id }}"
                             hx-swap="outerHTML"
                             class="text-xs text-purple-500 hover:text-purple-700 underline">
-                        🖼 生成配图
+                        {% trans "🖼 生成配图" %}
                     </button>
                 </div>
                 {% endif %}
@@ -137,7 +138,7 @@
                 </div>
                 {% if q.explanation %}
                 <div class="text-xs text-gray-600 bg-white rounded p-2 border">
-                    <span class="font-medium text-gray-700">解析：</span>{{ q.explanation }}
+                    <span class="font-medium text-gray-700">{% trans "解析：" %}</span>{{ q.explanation }}
                 </div>
                 {% endif %}
             </div>
@@ -152,13 +153,13 @@
         {# ── Loading or stuck: questions not yet generated ── #}
         {% if is_stuck %}
         <div class="bg-white border rounded-lg p-6 text-center">
-            <p class="text-red-600 font-medium mb-2">题目生成超时</p>
-            <p class="text-sm text-gray-500 mb-4">测试题目未能成功生成，可能是 AI 服务暂时不可用或网络异常。</p>
+            <p class="text-red-600 font-medium mb-2">{% trans "题目生成超时" %}</p>
+            <p class="text-sm text-gray-500 mb-4">{% trans "测试题目未能成功生成，可能是 AI 服务暂时不可用或网络异常。" %}</p>
             <div class="flex gap-2 justify-center">
-                <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-blue-600 hover:text-blue-800 px-4 py-2 border border-blue-200 rounded-lg">返回教学会话</a>
+                <a href="{% url 'teaching:session' session.session_id %}" class="text-sm text-blue-600 hover:text-blue-800 px-4 py-2 border border-blue-200 rounded-lg">{% trans "返回教学会话" %}</a>
                 <form method="post" action="{% url 'testing:retest' test.test_id %}">
                     {% csrf_token %}
-                    <button type="submit" class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">重新创建测试</button>
+                    <button type="submit" class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">{% trans "重新创建测试" %}</button>
                 </form>
             </div>
         </div>
@@ -169,13 +170,13 @@
              hx-swap="outerHTML">
             <div class="bg-white border rounded-lg p-8 text-center">
                 <div class="inline-block w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-4"></div>
-                <p class="text-gray-700 font-medium">正在生成测试题...</p>
-                <p class="text-sm text-gray-400 mt-1">AI 正在根据教学内容为你出题，请稍候</p>
+                <p class="text-gray-700 font-medium">{% trans "正在生成测试题..." %}</p>
+                <p class="text-sm text-gray-400 mt-1">{% trans "AI 正在根据教学内容为你出题，请稍候" %}</p>
                 <div class="mt-4">
                     <form method="post" action="{% url 'testing:terminate' test.test_id %}"
-                          onsubmit="return confirm('确定要取消本次测试吗？')">
+                          onsubmit="return confirm(this.dataset.confirm)" data-confirm="{% trans '确定要取消本次测试吗？' %}">
                         {% csrf_token %}
-                        <button type="submit" class="text-xs text-gray-400 hover:text-red-600 underline">取消测试</button>
+                        <button type="submit" class="text-xs text-gray-400 hover:text-red-600 underline">{% trans "取消测试" %}</button>
                     </form>
                 </div>
             </div>
@@ -186,14 +187,14 @@
             {# Progress sidebar #}
             <div class="col-span-1">
                 <div class="bg-white border rounded-lg p-3 sticky top-4">
-                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">进度</h3>
+                    <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{% trans "进度" %}</h3>
                     <div class="space-y-1">
                         {% for q in questions %}
                         <div class="text-xs px-2 py-1 rounded
                             {% if q.user_answer and q.is_correct %}bg-green-50 text-green-700
                             {% elif q.user_answer %}bg-red-50 text-red-700
                             {% else %}text-gray-400{% endif %}">
-                            第 {{ forloop.counter }} 题
+                            {% blocktrans with number=forloop.counter %}第 {{ number }} 题{% endblocktrans %}
                             {% if q.user_answer %}
                                 {% if q.is_correct %}✓{% else %}✗{% endif %}
                             {% endif %}
@@ -201,20 +202,20 @@
                         {% endfor %}
                     </div>
                     <div class="mt-3 text-xs text-gray-500">
-                        已答：{{ answered_count }}/{{ total_count }}
+                        {% trans "已答：" %}{{ answered_count }}/{{ total_count }}
                     </div>
                     <div class="mt-3 space-y-1">
                         {% if all_answered %}
                         <form method="post" action="{% url 'testing:finish' test.test_id %}"
-                              onsubmit="return confirm('确定要提交测试吗？提交后无法修改答案。')">
+                              onsubmit="return confirm(this.dataset.confirm)" data-confirm="{% trans '确定要提交测试吗？提交后无法修改答案。' %}">
                             {% csrf_token %}
-                            <button type="submit" class="w-full text-xs bg-green-600 text-white px-2 py-1.5 rounded hover:bg-green-700 transition">提交测试</button>
+                            <button type="submit" class="w-full text-xs bg-green-600 text-white px-2 py-1.5 rounded hover:bg-green-700 transition">{% trans "提交测试" %}</button>
                         </form>
                         {% endif %}
                         <form method="post" action="{% url 'testing:terminate' test.test_id %}"
-                              onsubmit="return confirm('确定要终止测试吗？')">
+                              onsubmit="return confirm(this.dataset.confirm)" data-confirm="{% trans '确定要终止测试吗？' %}">
                             {% csrf_token %}
-                            <button type="submit" class="w-full text-xs text-gray-400 hover:text-red-600 px-2 py-1">终止</button>
+                            <button type="submit" class="w-full text-xs text-gray-400 hover:text-red-600 px-2 py-1">{% trans "终止" %}</button>
                         </form>
                     </div>
                 </div>
@@ -225,16 +226,16 @@
                 {% if current_question %}
                 <div class="bg-white border rounded-lg p-5 mb-4" id="question-area">
                     <div class="mb-1">
-                        <span class="text-xs text-gray-400">第 {{ answered_count|add:1 }} 题 / 共 {{ total_count }} 题</span>
+                        <span class="text-xs text-gray-400">{% blocktrans with current=answered_count|add:1 total=total_count %}第 {{ current }} 题 / 共 {{ total }} 题{% endblocktrans %}</span>
                     </div>
                     <p class="text-base text-gray-800 font-medium mb-4">{{ current_question.question_text }}</p>
 
                     {% if current_question.temporary_image_url %}
                     <div class="mb-4">
-                        <img src="{{ current_question.temporary_image_url }}" alt="题目配图" class="w-full max-w-md rounded-lg shadow" loading="lazy">
+                        <img src="{{ current_question.temporary_image_url }}" alt="{% trans '题目配图' %}" class="w-full max-w-md rounded-lg shadow" loading="lazy">
                         <button onclick="DBT_Image.generate('{{ current_question.image_prompt|escapejs }}', 'question-image-area', {source: 'test_illustration', test_question_id: '{{ current_question.question_id }}'})"
                                 class="mt-2 text-xs text-purple-500 hover:text-purple-700 underline">
-                            🔄 重新生成配图
+                            {% trans "🔄 重新生成配图" %}
                         </button>
                     </div>
                     {% elif current_question.image_prompt %}
@@ -243,16 +244,16 @@
                          hx-trigger="load delay:1s"
                          hx-swap="outerHTML">
                         <div class="inline-block w-4 h-4 border-2 border-purple-200 border-t-purple-500 rounded-full animate-spin"></div>
-                        <span class="text-xs text-purple-600 ml-2">情景配图自动生成中...</span>
+                        <span class="text-xs text-purple-600 ml-2">{% trans "情景配图自动生成中..." %}</span>
                     </div>
                     {% else %}
                     <div class="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-center" id="fallback-image-area">
-                        <span class="text-xs text-gray-500">此题暂无配图</span>
+                        <span class="text-xs text-gray-500">{% trans "此题暂无配图" %}</span>
                         <button hx-post="{% url 'testing:generate_question_image' current_question.question_id %}"
                                 hx-target="#fallback-image-area"
                                 hx-swap="outerHTML"
                                 class="block mt-1 mx-auto text-xs text-purple-500 hover:text-purple-700 underline">
-                            🖼 生成配图
+                            {% trans "🖼 生成配图" %}
                         </button>
                     </div>
                     {% endif %}
@@ -274,19 +275,19 @@
                         {% endfor %}
                         <button type="submit" class="w-full mt-3 bg-blue-600 text-white px-4 py-2.5 rounded-lg hover:bg-blue-700 transition text-sm"
                                 {% if current_question.user_answer %}disabled{% endif %}>
-                            提交答案
+                            {% trans "提交答案" %}
                         </button>
                     </form>
-                    <div id="answer-indicator" class="htmx-indicator text-xs text-gray-400 mt-2 text-center">正在检查...</div>
+                    <div id="answer-indicator" class="htmx-indicator text-xs text-gray-400 mt-2 text-center">{% trans "正在检查..." %}</div>
                 </div>
                 {% else %}
                 <div class="bg-white border rounded-lg p-6 text-center">
-                    <p class="text-gray-500 mb-4">所有题目已作答。</p>
+                    <p class="text-gray-500 mb-4">{% trans "所有题目已作答。" %}</p>
                     {% if all_answered %}
                     <form method="post" action="{% url 'testing:finish' test.test_id %}"
-                          onsubmit="return confirm('确定要提交测试吗？')">
+                          onsubmit="return confirm(this.dataset.confirm)" data-confirm="{% trans '确定要提交测试吗？' %}">
                         {% csrf_token %}
-                        <button type="submit" class="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition">提交测试</button>
+                        <button type="submit" class="bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition">{% trans "提交测试" %}</button>
                     </form>
                     {% endif %}
                 </div>

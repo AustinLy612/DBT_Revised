@@ -95,6 +95,18 @@ html[data-theme="dark"] { color-scheme: dark; }
   border-left: 1px solid var(--line);
   color: var(--subtle);
 }
+.dbt-app .dbt-language-form { display: inline-flex; align-items: center; gap: .35rem; flex: none; color: var(--muted); font-size: .8rem; }
+.dbt-app .dbt-language-form select {
+  min-height: 2.4rem;
+  padding: .3rem .5rem;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.dbt-app .dbt-language-submit { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .dbt-app .dbt-theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -329,7 +341,7 @@ html[data-theme="dark"] { color-scheme: dark; }
   .dbt-app .dbt-home-hero::after { display: none; }
   .dbt-app .dbt-nav-inner { width: min(100% - 2rem, 1160px); flex-wrap: wrap; gap: .5rem; padding: .8rem 0; }
   .dbt-app .dbt-nav-links { order: 3; width: 100%; margin-left: 0; overflow-x: auto; gap: 1.1rem; padding: .2rem 0 .35rem; scrollbar-width: thin; }
-  .dbt-app .dbt-theme-toggle { margin-left: auto; }
+  .dbt-app .dbt-language-form { margin-left: auto; }
   .dbt-app .dbt-nav-user { padding-left: .7rem; }
   .dbt-app .dbt-main { width: min(100% - 2rem, 1160px); padding-top: 1.5rem; }
   .dbt-app .dbt-tool-grid a { grid-template-columns: 1fr auto; gap: .2rem .8rem; }
@@ -373,6 +385,7 @@ html[data-theme="dark"] .dbt-app .dbt-main :is(.bg-green-50, .bg-yellow-50) { ba
 html[data-theme="dark"] .dbt-app .dbt-main .bg-red-50 { background: #4b2d31; border-color: #a16b6a; }
 html[data-theme="dark"] .dbt-app .dbt-main :is(.text-red-700, .text-red-600) { color: #ffc2bb; }
 html[data-theme="dark"] .dbt-app .dbt-main :is(.text-green-700, .text-yellow-700, .text-orange-700) { color: #e3eec6; }
+html[data-theme="dark"] .dbt-app[data-page="mood-home"] .dbt-mood-context--after-teaching { background: #254934; color: #e5f6e9; }
 html[data-theme="dark"] .dbt-app .dbt-main :is(.bg-blue-600, .bg-purple-600, .bg-green-600):not(a):not(button) { background: #28735f; }
 html[data-theme="dark"] .dbt-app .dbt-main :is(a, button).bg-blue-600,
 html[data-theme="dark"] .dbt-app .dbt-main :is(a, button).bg-blue-500,

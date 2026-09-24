@@ -9,6 +9,7 @@ from . import views
 
 urlpatterns = [
     path("", views.index_view, name="index"),
+    path("i18n/", include("django.conf.urls.i18n")),
     path("admin/", admin.site.urls),
     # App URL namespaces (wired up as apps gain views)
     path("accounts/", include("accounts.urls")),

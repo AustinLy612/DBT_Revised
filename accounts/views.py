@@ -1,3 +1,4 @@
+from django.utils.translation import gettext as _
 from django.contrib.auth import get_user_model, login, logout
 from django.contrib.auth.decorators import login_required
 from django.db import IntegrityError
@@ -26,7 +27,7 @@ def register_view(request):
         try:
             user.save()
         except IntegrityError:
-            form.add_error("username", "该用户名已被使用，请换一个")
+            form.add_error("username", _("该用户名已被使用，请换一个"))
             return render(request, "accounts/register.html", {"form": form})
 
         invite.status = invite.Status.USED

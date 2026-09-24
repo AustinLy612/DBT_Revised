@@ -1,13 +1,14 @@
 {% extends "base.html" %}
-{% block title %}心情记录 - DBT 技能教学平台{% endblock %}
+{% load i18n localized %}
+{% block title %}{% trans "心情记录 - DBT 技能教学平台" %}{% endblock %}
 {% block page_id %}mood-home{% endblock %}
 {% block content %}
 <div class="max-w-4xl mx-auto mt-6">
     <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-bold text-gray-800">心情记录</h1>
+        <h1 class="text-xl font-bold text-gray-800">{% trans "心情记录" %}</h1>
         <div class="flex gap-2">
-            <a href="{% url 'mood:achievements' %}" class="text-sm text-purple-600 hover:text-purple-800 px-4 py-2 border border-purple-200 rounded-lg">成就</a>
-            <a href="{% url 'mood:record' %}" class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">记录心情</a>
+            <a href="{% url 'mood:achievements' %}" class="text-sm text-purple-600 hover:text-purple-800 px-4 py-2 border border-purple-200 rounded-lg">{% trans "成就" %}</a>
+            <a href="{% url 'mood:record' %}" class="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition">{% trans "记录心情" %}</a>
         </div>
     </div>
 
@@ -26,12 +27,12 @@
             <div class="text-3xl">{{ record.emoji }}</div>
             <div class="flex-1">
                 <div class="flex items-center gap-2 mb-1">
-                    <span class="text-xs px-2 py-0.5 rounded-full
+                    <span class="dbt-mood-context {% if record.context == 'after_teaching' %}dbt-mood-context--after-teaching{% endif %} text-xs px-2 py-0.5 rounded-full
                         {% if record.context == 'before_teaching' %}bg-blue-100 text-blue-700
                         {% elif record.context == 'after_teaching' %}bg-green-100 text-green-700
                         {% elif record.context == 'after_testing' %}bg-purple-100 text-purple-700
                         {% else %}bg-gray-100 text-gray-600{% endif %}">
-                        {{ record.context_display }}
+                        {{ record.context_display|localize_label }}
                     </span>
                     <span class="text-xs text-gray-400">{{ record.created_at }}</span>
                 </div>
@@ -44,9 +45,9 @@
     </div>
     {% else %}
     <div class="bg-white border rounded-lg p-12 text-center">
-        <p class="text-gray-400 text-lg mb-2">还没有心情记录</p>
-        <p class="text-gray-300 text-sm">开始记录你的心情变化吧</p>
-        <a href="{% url 'mood:record' %}" class="inline-block mt-4 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">记录第一条心情</a>
+        <p class="text-gray-400 text-lg mb-2">{% trans "还没有心情记录" %}</p>
+        <p class="text-gray-300 text-sm">{% trans "开始记录你的心情变化吧" %}</p>
+        <a href="{% url 'mood:record' %}" class="inline-block mt-4 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition text-sm">{% trans "记录第一条心情" %}</a>
     </div>
     {% endif %}
 </div>

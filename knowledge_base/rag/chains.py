@@ -52,6 +52,9 @@ from .validator import OutputValidator
 
 logger = logging.getLogger("dbt_platform.knowledge_base.rag")
 
+# Five full multiple-choice questions need more output space than shorter RAG flows.
+TEST_QUESTIONS_MAX_TOKENS = 8192
+
 
 def _call_llm_or_mock(
     messages: list[dict[str, str]],
@@ -60,6 +63,7 @@ def _call_llm_or_mock(
     *,
     provider: str | None = None,
     on_provider_fallback: FallbackCallback | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Call the LLM or return a mock response for testing.
 
@@ -79,12 +83,14 @@ def _call_llm_or_mock(
                 f"Mock validation failed for {schema_model.__name__}: {exc}"
             ) from exc
 
+    completion_kwargs = {"max_tokens": max_tokens} if max_tokens is not None else {}
     raw_result = chat_completion(
         messages,
         temperature=0.3,
         response_format={"type": "json_object"},
         provider=provider,
         on_provider_fallback=on_provider_fallback,
+        **completion_kwargs,
     )
 
     content = raw_result["content"]
@@ -464,14 +470,16 @@ def _parse_streaming_content(full_text: str, chunks: list[dict[str, Any]]) -> di
 
     source_ids = [c.get("chunk_id", "") for c in chunks if c.get("chunk_id")]
 
+    from .schemas import canonical_enum
+
     return {
         "content": clean_content,
-        "message_type": meta.get("message_type", "讲解"),
+        "message_type": canonical_enum(meta.get("message_type", "讲解")),
         "image_prompt": meta.get("image_prompt", ""),
         "question": meta.get("question", ""),
         "confidence": 0.8,
         "source_chunk_ids": source_ids,
-        "risk_level": meta.get("risk_level", "无"),
+        "risk_level": canonical_enum(meta.get("risk_level", "无")),
         "should_stop_session": meta.get("should_stop_session", False),
         "risk_reasoning": meta.get("risk_reasoning", ""),
     }
@@ -562,6 +570,7 @@ def generate_test_questions(
         mock_llm_response,
         provider=provider,
         on_provider_fallback=on_provider_fallback,
+        max_tokens=TEST_QUESTIONS_MAX_TOKENS,
     )
     return TestQuestions(**result)
 

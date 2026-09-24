@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from http import HTTPStatus
 
+from django.utils.translation import gettext as _
 from django.contrib import messages
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -52,16 +53,16 @@ def start_test_view(request: HttpRequest, session_id: str) -> HttpResponse:
     session = get_object_or_404(TeachingSession, session_id=session_id, user=request.user)
 
     if session.status != TeachingSession.Status.COMPLETED:
-        messages.warning(request, "教学未完成，无法开始测试。")
+        messages.warning(request, _("教学未完成，无法开始测试。"))
         return redirect("teaching:session", session_id=session_id)
 
     attempt_no = services.get_retest_attempt_no(session)
     test = services.create_test(session, request.user, attempt_no=attempt_no)
 
     # Dispatch async question generation via Celery
-    generate_test_questions_async.delay(test.test_id)
+    generate_test_questions_async.delay(test.test_id, request.LANGUAGE_CODE)
 
-    messages.success(request, f"测试已创建，正在生成题目（第 {attempt_no} 次测试）。")
+    messages.success(request, _("测试已创建，正在生成题目（第 %(number)s 次测试）。") % {"number": attempt_no})
     return redirect("testing:test", test_id=test.test_id)
 
 
@@ -146,9 +147,9 @@ def poll_questions_view(request: HttpRequest, test_id: str) -> HttpResponse:
         session_url = reverse("teaching:session", kwargs={"session_id": test.session_id})
         return HttpResponse(
             '<div class="bg-white border rounded-lg p-6 text-center">'
-            '<p class="text-red-600 mb-3">题目生成失败，请重试。</p>'
+            f'<p class="text-red-600 mb-3">{_("题目生成失败，请重试。")}</p>'
             f'<a href="{session_url}" '
-            'class="text-sm text-blue-600 hover:text-blue-800">返回教学会话</a>'
+            f'class="text-sm text-blue-600 hover:text-blue-800">{_("返回教学会话")}</a>'
             "</div>"
         )
 
@@ -158,8 +159,8 @@ def poll_questions_view(request: HttpRequest, test_id: str) -> HttpResponse:
         f'hx-get="{poll_url}" hx-trigger="every 2s" hx-swap="outerHTML">'
         '<div class="inline-block w-8 h-8 border-4 border-blue-200 border-t-blue-600 '
         'rounded-full animate-spin mb-3"></div>'
-        '<p class="text-gray-600">正在生成测试题，请稍候...</p>'
-        '<p class="text-xs text-gray-400 mt-1">AI 正在根据教学内容为你出题</p>'
+        f'<p class="text-gray-600">{_("正在生成测试题，请稍候...")}</p>'
+        f'<p class="text-xs text-gray-400 mt-1">{_("AI 正在根据教学内容为你出题")}</p>'
         "</div>"
     )
 
@@ -177,20 +178,20 @@ def answer_question_view(request: HttpRequest, test_id: str) -> HttpResponse:
     test = services.get_test_or_404(test_id, request.user)
 
     if test.status != Test.Status.ONGOING:
-        return _htmx_error("测试已结束，无法提交答案。")
+        return _htmx_error(_("测试已结束，无法提交答案。"))
 
     question_id = request.POST.get("question_id", "").strip()
     answer_letter = request.POST.get("answer", "").strip().upper()
 
     if not question_id:
-        return _htmx_error("缺少题目ID。")
+        return _htmx_error(_("缺少题目ID。"))
     if answer_letter not in ("A", "B", "C", "D"):
-        return _htmx_error("请选择一个有效选项。")
+        return _htmx_error(_("请选择一个有效选项。"))
 
     question = get_object_or_404(TestQuestion, question_id=question_id, test=test)
 
     if question.user_answer:
-        return _htmx_error("本题已经作答。")
+        return _htmx_error(_("本题已经作答。"))
 
     # Convert letter to index for risk analysis text
     answer_idx = _LETTER_TO_INDEX.get(answer_letter, 0)
@@ -242,13 +243,13 @@ def finish_test_view(request: HttpRequest, test_id: str) -> HttpResponse:
     test = services.get_test_or_404(test_id, request.user)
 
     if test.status != Test.Status.ONGOING:
-        messages.info(request, "测试已经结束。")
+        messages.info(request, _("测试已经结束。"))
         return redirect("testing:test", test_id=test_id)
 
     # Check all questions answered
     unanswered = TestQuestion.objects.filter(test=test, user_answer="").count()
     if unanswered > 0:
-        messages.warning(request, f"还有 {unanswered} 题未作答，请完成所有题目。")
+        messages.warning(request, _("还有 %(count)s 题未作答，请完成所有题目。") % {"count": unanswered})
         return redirect("testing:test", test_id=test_id)
 
     result = services.finish_test(test)
@@ -256,20 +257,23 @@ def finish_test_view(request: HttpRequest, test_id: str) -> HttpResponse:
     if result["passed"]:
         messages.success(
             request,
-            f"恭喜！你通过了测试（{result['correct_count']}/{result['total_questions']}）。"
+            _("恭喜！你通过了测试（%(correct)s/%(total)s）。") % {
+                "correct": result["correct_count"], "total": result["total_questions"],
+            }
         )
     else:
         messages.warning(
             request,
-            f"未通过测试（{result['correct_count']}/{result['total_questions']}），"
-            f"需要至少答对 4 题。你可以重测。"
+            _("未通过测试（%(correct)s/%(total)s），需要至少答对 4 题。你可以重测。") % {
+                "correct": result["correct_count"], "total": result["total_questions"],
+            }
         )
 
     # Trigger achievement check after test completion
     from mood.services import check_and_award_achievements
     ach_result = check_and_award_achievements(request.user, event="test_completed")
     if ach_result["newly_unlocked"]:
-        messages.success(request, f"🏆 新成就解锁：{'、'.join(ach_result['newly_unlocked'])}")
+        messages.success(request, _("🏆 新成就解锁：%(names)s") % {"names": ", ".join(_(name) for name in ach_result["newly_unlocked"])})
 
     # Redirect to post-test mood recording (popup flow)
     if not test.post_mood_id:
@@ -294,9 +298,9 @@ def retest_view(request: HttpRequest, test_id: str) -> HttpResponse:
     attempt_no = services.get_retest_attempt_no(session)
     new_test = services.create_test(session, request.user, attempt_no=attempt_no)
 
-    generate_test_questions_async.delay(new_test.test_id)
+    generate_test_questions_async.delay(new_test.test_id, request.LANGUAGE_CODE)
 
-    messages.success(request, f"测试已创建，正在生成题目（第 {attempt_no} 次测试）。")
+    messages.success(request, _("测试已创建，正在生成题目（第 %(number)s 次测试）。") % {"number": attempt_no})
     return redirect("testing:test", test_id=new_test.test_id)
 
 
@@ -313,11 +317,11 @@ def terminate_test_view(request: HttpRequest, test_id: str) -> HttpResponse:
     test = services.get_test_or_404(test_id, request.user)
 
     if test.status != Test.Status.ONGOING:
-        messages.info(request, "测试已经结束。")
+        messages.info(request, _("测试已经结束。"))
         return redirect("testing:test", test_id=test_id)
 
     services.terminate_test(test)
-    messages.info(request, "测试已终止。")
+    messages.info(request, _("测试已终止。"))
     return redirect("testing:test", test_id=test_id)
 
 
@@ -348,10 +352,10 @@ def generate_question_image_view(request: HttpRequest, question_id: str) -> Http
     if not question.image_prompt:
         truncated = question.question_text[:200] if question.question_text else ""
         if truncated:
-            question.image_prompt = f"DBT正念技能教学情景配图：{truncated}，温暖插画风格"
+            question.image_prompt = _("DBT正念技能教学情景配图：%(description)s，温暖插画风格") % {"description": truncated}
             question.save(update_fields=["image_prompt"])
         else:
-            return _htmx_error("无法生成配图：缺少图片描述。")
+            return _htmx_error(_("无法生成配图：缺少图片描述。"))
 
     # Dispatch Celery task if no image yet
     if not question.temporary_image_url:
@@ -371,11 +375,11 @@ def question_image_status_view(request: HttpRequest, question_id: str) -> HttpRe
         retry_url = reverse("testing:retry_question_image", kwargs={"question_id": question_id})
         return HttpResponse(
             '<div class="mb-4">'
-            f'<img src="{question.temporary_image_url}" alt="题目配图" '
+            f'<img src="{question.temporary_image_url}" alt="{_("题目配图")}" '
             'class="w-full max-w-md rounded-lg shadow" loading="lazy">'
             f'<button hx-post="{retry_url}" hx-swap="outerHTML" hx-target="closest div" '
             'class="mt-2 text-xs text-purple-500 hover:text-purple-700 underline">'
-            '重新生成配图'
+            f'{_("重新生成配图")}'
             '</button>'
             '</div>'
         )
@@ -384,7 +388,7 @@ def question_image_status_view(request: HttpRequest, question_id: str) -> HttpRe
     if status == "failed":
         retry_url = reverse("testing:retry_question_image", kwargs={"question_id": question_id})
         return _image_failed_html(
-            get_image_error(question_id) or "配图失败，请稍后重试",
+            _(get_image_error(question_id) or "配图失败，请稍后重试"),
             retry_url,
         )
 
@@ -400,7 +404,7 @@ def retry_question_image_view(request: HttpRequest, question_id: str) -> HttpRes
 
     question = get_object_or_404(TestQuestion, question_id=question_id)
     if not question.image_prompt:
-        return _htmx_error("无法重试：缺少图片描述。")
+        return _htmx_error(_("无法重试：缺少图片描述。"))
     clear_image_status(question_id)
     question.temporary_image_url = ""
     question.save(update_fields=["temporary_image_url"])
@@ -410,7 +414,7 @@ def retry_question_image_view(request: HttpRequest, question_id: str) -> HttpRes
 
 def _image_polling_html(question_id: str) -> HttpResponse:
     from media_app.concurrency import get_image_status, wait_label_for_status
-    label = wait_label_for_status(get_image_status(question_id))
+    label = _(wait_label_for_status(get_image_status(question_id)))
     poll_url = reverse("testing:question_image_status", kwargs={"question_id": question_id})
     return HttpResponse(
         '<div class="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-lg text-center"'
@@ -427,7 +431,7 @@ def _image_failed_html(message: str, retry_url: str) -> HttpResponse:
         f'<p class="text-xs text-red-600 mb-2">{message}</p>'
         f'<button hx-post="{retry_url}" hx-swap="outerHTML" hx-target="closest div" '
         'class="text-xs text-purple-600 hover:text-purple-800 underline">'
-        '重新生成配图</button></div>'
+        f'{_("重新生成配图")}</button></div>'
     )
 
 

@@ -16,9 +16,10 @@ def _provider_max_retries() -> int:
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=10, queue="questions")
-def generate_test_questions_async(self, test_id: str):
+def generate_test_questions_async(self, test_id: str, language: str = "zh-hans"):
     from .models import Test
     from .services import generate_and_save_questions
+    from django.utils import translation
 
     try:
         test = Test.objects.get(test_id=test_id)
@@ -27,7 +28,8 @@ def generate_test_questions_async(self, test_id: str):
         return
 
     try:
-        generate_and_save_questions(test, test.user, test.session)
+        with translation.override(language if language in ("en", "zh-hans") else "zh-hans"):
+            generate_and_save_questions(test, test.user, test.session)
     except Exception as exc:
         test.status = Test.Status.USER_TERMINATED
         test.save(update_fields=["status"])

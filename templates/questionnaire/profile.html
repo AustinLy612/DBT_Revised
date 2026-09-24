@@ -1,16 +1,17 @@
 {% extends "base.html" %}
-{% block title %}问卷 - DBT 技能教学平台{% endblock %}
+{% load i18n %}
+{% block title %}{% trans "问卷 - DBT 技能教学平台" %}{% endblock %}
 {% block page_id %}questionnaire{% endblock %}
 {% block content %}
 <div id="questionnaire-form" class="max-w-2xl mx-auto mt-6" x-data="{ hobbyOther: {{ hobby_has_other|yesno:'true,false' }}, concernOther: {{ concern_has_other|yesno:'true,false' }} }">
     {% if is_first_time %}
     <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-        <h1 class="text-xl font-bold text-blue-800 mb-1">欢迎！请先完成问卷</h1>
-        <p class="text-blue-600 text-sm">在开始教学之前，我们需要了解一些关于你的基本信息。这些信息将帮助 AI 为你提供更个性化的教学体验。</p>
+        <h1 class="text-xl font-bold text-blue-800 mb-1">{% trans "欢迎！请先完成问卷" %}</h1>
+        <p class="text-blue-600 text-sm">{% trans "在开始教学之前，我们需要了解一些关于你的基本信息。这些信息将帮助 AI 为你提供更个性化的教学体验。" %}</p>
     </div>
     {% else %}
-    <h1 class="text-2xl font-bold text-gray-800 mb-2">修改问卷</h1>
-    <p class="text-gray-600 mb-6 text-sm">修改后的信息将在下次教学时生效。</p>
+    <h1 class="text-2xl font-bold text-gray-800 mb-2">{% trans "修改问卷" %}</h1>
+    <p class="text-gray-600 mb-6 text-sm">{% trans "修改后的信息将在下次教学时生效。" %}</p>
     {% endif %}
 
     <form method="post" class="space-y-8">
@@ -84,7 +85,7 @@
         </fieldset>
 
         <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition">
-            {% if is_first_time %}提交并开始使用{% else %}保存修改{% endif %}
+            {% if is_first_time %}{% trans "提交并开始使用" %}{% else %}{% trans "保存修改" %}{% endif %}
         </button>
     </form>
 </div>

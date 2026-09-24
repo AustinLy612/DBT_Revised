@@ -1,10 +1,11 @@
 {% extends "base.html" %}
-{% block title %}登录 - DBT 技能教学平台{% endblock %}
+{% load i18n %}
+{% block title %}{% trans "登录 - DBT 技能教学平台" %}{% endblock %}
 {% block page_id %}login{% endblock %}
 {% block content %}
 <div class="dbt-auth-shell">
-    <h1>登录</h1>
-    <p class="dbt-auth-intro">继续你的 DBT 技能学习。</p>
+    <h1>{% trans "登录" %}</h1>
+    <p class="dbt-auth-intro">{% trans "继续你的 DBT 技能学习。" %}</p>
     <form method="post" class="dbt-auth-card space-y-4">
         {% csrf_token %}
         {% if form.non_field_errors %}
@@ -23,8 +24,8 @@
             {% if form.password.errors %}<p class="text-red-500 text-sm mt-1">{{ form.password.errors.0 }}</p>{% endif %}
         </div>
         <input type="hidden" name="next" value="{{ request.GET.next }}">
-        <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition">登录</button>
+        <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition">{% trans "登录" %}</button>
     </form>
-    <p class="text-center text-sm text-gray-500 mt-4">没有账号？<a href="{% url 'accounts:register' %}" class="text-blue-600 hover:underline">注册</a></p>
+    <p class="text-center text-sm text-gray-500 mt-4">{% trans "没有账号？" %}<a href="{% url 'accounts:register' %}" class="text-blue-600 hover:underline">{% trans "注册" %}</a></p>
 </div>
 {% endblock %}

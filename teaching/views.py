@@ -10,6 +10,7 @@ import json
 import logging
 from http import HTTPStatus
 
+from django.utils.translation import gettext as _
 from django.contrib import messages
 from django.http import StreamingHttpResponse
 from django.http import HttpRequest, HttpResponse
@@ -68,7 +69,7 @@ def session_view(request: HttpRequest, session_id: str) -> HttpResponse:
         except (ConfigurationError, APIError) as exc:
             logger.error("Inquiry question generation failed for session %s: %s",
                          session.session_id, exc)
-            inquiry_data = dict(services.DEFAULT_INQUIRY_DATA)
+            inquiry_data = services._default_inquiry_data()
 
     # Generate AI opening message when first entering the teaching phase
     if not is_terminal and session.phase == TeachingSession.Phase.TEACHING and not conversation:
@@ -116,7 +117,7 @@ def record_pre_mood_view(request: HttpRequest, session_id: str) -> HttpResponse:
     if session.phase == TeachingSession.Phase.INFO_COLLECTION:
         with session_operation_lock(session.session_id, "skill-selection") as acquired:
             if not acquired:
-                messages.info(request, "AI 正在生成技能推荐，请勿重复提交。")
+                messages.info(request, _("AI 正在生成技能推荐，请勿重复提交。"))
                 return redirect("teaching:session", session_id=session_id)
 
             session.refresh_from_db()
@@ -127,13 +128,13 @@ def record_pre_mood_view(request: HttpRequest, session_id: str) -> HttpResponse:
             except (ConfigurationError, APIError) as exc:
                 logger.error("Info collection / skill selection failed for session %s: %s",
                              session.session_id, exc)
-                messages.error(request, "AI 技能推荐暂时不可用，请稍后再试。")
+                messages.error(request, _("AI 技能推荐暂时不可用，请稍后再试。"))
                 return redirect("teaching:session", session_id=session_id)
-        messages.success(request, f"AI 已推荐技能「{session.selected_skill}」，请确认或修改。")
+        messages.success(request, _("AI 已推荐技能「%(skill)s」，请确认或修改。") % {"skill": _(session.selected_skill)})
         return redirect("teaching:session", session_id=session_id)
 
     if session.phase != TeachingSession.Phase.PRE_MOOD_RECORDING:
-        messages.warning(request, "当前不在心情记录阶段。")
+        messages.warning(request, _("当前不在心情记录阶段。"))
         return redirect("teaching:session", session_id=session_id)
 
     try:
@@ -146,7 +147,7 @@ def record_pre_mood_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
     services.run_pre_mood(session, request.user, mood_value, emoji, note)
 
-    messages.success(request, "心情已记录，请和 AI 教练聊聊你最近的情况吧。")
+    messages.success(request, _("心情已记录，请和 AI 教练聊聊你最近的情况吧。"))
     return redirect("teaching:session", session_id=session_id)
 
 
@@ -167,15 +168,15 @@ def personal_inquiry_view(request: HttpRequest, session_id: str) -> HttpResponse
     session = services.get_session_or_404(session_id, request.user)
 
     if session.phase == TeachingSession.Phase.INFO_COLLECTION:
-        messages.info(request, "AI 正在生成技能推荐，请勿重复提交。")
+        messages.info(request, _("AI 正在生成技能推荐，请勿重复提交。"))
         return redirect("teaching:session", session_id=session_id)
     if session.phase != TeachingSession.Phase.PERSONAL_INQUIRY:
-        messages.warning(request, "当前不在个人情况了解阶段。")
+        messages.warning(request, _("当前不在个人情况了解阶段。"))
         return redirect("teaching:session", session_id=session_id)
 
     personal_context = request.POST.get("personal_context", "").strip()
     if not personal_context:
-        messages.warning(request, "请分享一些你最近的经历或感受。")
+        messages.warning(request, _("请分享一些你最近的经历或感受。"))
         return redirect("teaching:session", session_id=session_id)
 
     claimed = TeachingSession.objects.filter(
@@ -187,7 +188,7 @@ def personal_inquiry_view(request: HttpRequest, session_id: str) -> HttpResponse
         phase=TeachingSession.Phase.INFO_COLLECTION,
     )
     if not claimed:
-        messages.info(request, "AI 正在生成技能推荐，请勿重复提交。")
+        messages.info(request, _("AI 正在生成技能推荐，请勿重复提交。"))
         return redirect("teaching:session", session_id=session_id)
 
     session.personal_context = personal_context
@@ -199,10 +200,10 @@ def personal_inquiry_view(request: HttpRequest, session_id: str) -> HttpResponse
                      session.session_id, exc)
         session.phase = TeachingSession.Phase.INFO_COLLECTION
         session.save(update_fields=["phase"])
-        messages.error(request, "AI 技能推荐暂时不可用，请稍后再试。")
+        messages.error(request, _("AI 技能推荐暂时不可用，请稍后再试。"))
         return redirect("teaching:session", session_id=session_id)
 
-    messages.success(request, f"AI 已根据你的情况推荐技能「{session.selected_skill}」，请确认或修改。")
+    messages.success(request, _("AI 已根据你的情况推荐技能「%(skill)s」，请确认或修改。") % {"skill": _(session.selected_skill)})
     return redirect("teaching:session", session_id=session_id)
 
 
@@ -219,10 +220,10 @@ def confirm_skill_view(request: HttpRequest, session_id: str) -> HttpResponse:
     session = services.get_session_or_404(session_id, request.user)
 
     if session.phase == TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING:
-        messages.info(request, "教学计划正在生成，请勿重复提交。")
+        messages.info(request, _("教学计划正在生成，请勿重复提交。"))
         return redirect("teaching:session", session_id=session_id)
     if session.phase != TeachingSession.Phase.SKILL_SELECTION:
-        messages.warning(request, "当前不在技能选择阶段。")
+        messages.warning(request, _("当前不在技能选择阶段。"))
         return redirect("teaching:session", session_id=session_id)
 
     custom_skill = request.POST.get("custom_skill", "").strip()
@@ -236,7 +237,7 @@ def confirm_skill_view(request: HttpRequest, session_id: str) -> HttpResponse:
         phase=TeachingSession.Phase.SKILL_SELECTION,
     ).update(**updates)
     if not claimed:
-        messages.info(request, "教学计划正在生成，请勿重复提交。")
+        messages.info(request, _("教学计划正在生成，请勿重复提交。"))
         return redirect("teaching:session", session_id=session_id)
 
     session.phase = TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING
@@ -251,7 +252,7 @@ def confirm_skill_view(request: HttpRequest, session_id: str) -> HttpResponse:
             phase=TeachingSession.Phase.RAG_RETRIEVAL_FOR_TEACHING,
         ).update(phase=TeachingSession.Phase.SKILL_SELECTION)
         logger.error("Teaching plan generation failed for session %s: %s", session.session_id, exc)
-        messages.error(request, "教学计划生成暂时不可用，请稍后再试。")
+        messages.error(request, _("教学计划生成暂时不可用，请稍后再试。"))
         return redirect("teaching:session", session_id=session_id)
     except Exception:
         TeachingSession.objects.filter(
@@ -261,7 +262,7 @@ def confirm_skill_view(request: HttpRequest, session_id: str) -> HttpResponse:
         logger.exception("Unexpected teaching plan failure for session %s", session.session_id)
         raise
 
-    messages.success(request, f"教学计划已生成，开始学习「{session.selected_skill}」。")
+    messages.success(request, _("教学计划已生成，开始学习「%(skill)s」。") % {"skill": _(session.selected_skill)})
     return redirect("teaching:session", session_id=session_id)
 
 
@@ -281,11 +282,11 @@ def send_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
     session = services.get_session_or_404(session_id, request.user)
 
     if session.status != TeachingSession.Status.ONGOING:
-        return _htmx_error("会话已结束，无法发送消息。")
+        return _htmx_error(_("会话已结束，无法发送消息。"))
 
     student_text = request.POST.get("message", "").strip()
     if not student_text:
-        return _htmx_error("消息不能为空。")
+        return _htmx_error(_("消息不能为空。"))
 
     conversation = services.get_conversation_history(session)
 
@@ -313,7 +314,7 @@ def send_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
         )
     except (ConfigurationError, APIError) as exc:
         logger.error("Teaching response failed for session %s: %s", session.session_id, exc)
-        return _htmx_error("AI 教学响应暂时不可用，请稍后再试。")
+        return _htmx_error(_("AI 教学响应暂时不可用，请稍后再试。"))
 
     # ── Handle risk from merged response ──
     if not keyword_triggered and response_data.get("should_stop_session"):
@@ -408,24 +409,24 @@ def end_session_view(request: HttpRequest, session_id: str) -> HttpResponse:
     session = services.get_session_or_404(session_id, request.user)
 
     if session.status != TeachingSession.Status.ONGOING:
-        messages.info(request, "会话已经结束。")
+        messages.info(request, _("会话已经结束。"))
         return redirect("teaching:session", session_id=session_id)
 
     conversation = services.get_conversation_history(session)
 
     try:
         services.generate_session_summary(session, request.user, conversation)
-        messages.success(request, "教学已完成，摘要已生成。")
+        messages.success(request, _("教学已完成，摘要已生成。"))
     except (ConfigurationError, APIError) as exc:
         logger.error("Summary generation failed for session %s: %s", session.session_id, exc)
         services.terminate_session(session)
-        messages.warning(request, "教学摘要生成失败，但会话已结束。")
+        messages.warning(request, _("教学摘要生成失败，但会话已结束。"))
 
     # Trigger achievement check after session completion
     from mood.services import check_and_award_achievements
     result = check_and_award_achievements(request.user, event="session_completed")
     if result["newly_unlocked"]:
-        messages.success(request, f"🏆 新成就解锁：{'、'.join(result['newly_unlocked'])}")
+        messages.success(request, _("🏆 新成就解锁：%(names)s") % {"names": ", ".join(_(name) for name in result["newly_unlocked"])})
 
     # Redirect to post-mood recording (popup flow)
     if not session.post_mood_id:
@@ -443,11 +444,11 @@ def terminate_session_view(request: HttpRequest, session_id: str) -> HttpRespons
     session = services.get_session_or_404(session_id, request.user)
 
     if session.status != TeachingSession.Status.ONGOING:
-        messages.info(request, "会话已经结束。")
+        messages.info(request, _("会话已经结束。"))
         return redirect("teaching:session", session_id=session_id)
 
     services.terminate_session(session)
-    messages.info(request, "教学已终止。")
+    messages.info(request, _("教学已终止。"))
     return redirect("teaching:session", session_id=session_id)
 
 
@@ -498,9 +499,11 @@ def _has_farewell(content: str) -> bool:
         "今天就到这里", "今天就到这",
         "我们下次", "期待下次",
         "加油",  # often paired with goodbye
+        "goodbye", "see you", "next time", "take care", "that's all for today",
     ]
     # Require at least one goodbye + one closure pattern
-    hits = sum(1 for p in patterns if p in content)
+    normalized = content.casefold()
+    hits = sum(1 for p in patterns if p in normalized)
     return hits >= 2
 
 
@@ -518,14 +521,14 @@ def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
 
     if session.status != TeachingSession.Status.ONGOING:
         return HttpResponse(
-            "data: {\"type\": \"error\", \"message\": \"会话已结束\"}\n\n",
+            f"data: {json.dumps({'type': 'error', 'message': _('会话已结束')}, ensure_ascii=False)}\n\n",
             content_type="text/event-stream",
         )
 
     student_text = request.POST.get("message", "").strip()
     if not student_text:
         return HttpResponse(
-            "data: {\"type\": \"error\", \"message\": \"消息不能为空\"}\n\n",
+            f"data: {json.dumps({'type': 'error', 'message': _('消息不能为空')}, ensure_ascii=False)}\n\n",
             content_type="text/event-stream",
         )
 
@@ -534,7 +537,7 @@ def stream_message_view(request: HttpRequest, session_id: str) -> HttpResponse:
     keyword_triggered, _keywords = check_keyword_risk(student_text)
     if keyword_triggered:
         return HttpResponse(
-            "data: {\"type\": \"error\", \"message\": \"消息包含敏感内容，请重新表述\"}\n\n",
+            f"data: {json.dumps({'type': 'error', 'message': _('消息包含敏感内容，请重新表述')}, ensure_ascii=False)}\n\n",
             content_type="text/event-stream",
         )
 
@@ -642,7 +645,7 @@ def _image_failed_html(message: str, retry_url: str) -> HttpResponse:
         f'<p class="text-xs text-red-600 mb-2">{message}</p>'
         f'<button hx-post="{retry_url}" hx-swap="outerHTML" hx-target="closest div" '
         'class="text-xs text-purple-600 hover:text-purple-800 underline">'
-        '重新生成配图</button></div>'
+        f'{_("重新生成配图")}</button></div>'
     )
 
 
@@ -654,14 +657,14 @@ def message_image_status_view(request: HttpRequest, message_id: str) -> HttpResp
     if message.image_url:
         return HttpResponse(
             '<div class="mt-2 flex justify-center">'
-            f'<img src="{message.image_url}" alt="教学配图" loading="lazy" '
+            f'<img src="{message.image_url}" alt="{_("教学配图")}" loading="lazy" '
             'class="rounded-lg shadow border border-gray-200 max-w-full max-w-lg">'
             "</div>"
         )
     status = get_image_status(message_id)
     if status == "failed":
         retry_url = reverse("teaching:retry_message_image", kwargs={"message_id": message_id})
-        return _image_failed_html(get_image_error(message_id) or "配图失败，请稍后重试", retry_url)
+        return _image_failed_html(_(get_image_error(message_id) or "配图失败，请稍后重试"), retry_url)
     return _teaching_message_polling_html(message_id)
 
 
@@ -673,7 +676,7 @@ def retry_message_image_view(request: HttpRequest, message_id: str) -> HttpRespo
 
     message = get_object_or_404(ChatMessage, message_id=message_id, user=request.user)
     if not message.image_prompt:
-        return _htmx_error("无法重试：缺少图片描述。")
+        return _htmx_error(_("无法重试：缺少图片描述。"))
     clear_image_status(message_id)
     message.image_url = ""
     message.save(update_fields=["image_url"])
@@ -681,7 +684,7 @@ def retry_message_image_view(request: HttpRequest, message_id: str) -> HttpRespo
         _start_image_generation(message.session, message.image_prompt, message.message_id)
     except Exception:
         logger.exception("Retry teaching image failed for message %s", message_id)
-        return _htmx_error("配图重试失败，请稍后再试。")
+        return _htmx_error(_("配图重试失败，请稍后再试。"))
     return _teaching_message_polling_html(message_id)
 
 
@@ -692,7 +695,7 @@ def generate_scene_image_view(request: HttpRequest, session_id: str) -> HttpResp
     session = services.get_session_or_404(session_id, request.user)
     prompt = request.POST.get("prompt", "").strip()
     if not prompt:
-        prompt = f"DBT技能教学情景图：{session.selected_skill or '正念练习'}"
+        prompt = f"{_('DBT技能教学情景图：')}{_(session.selected_skill) if session.selected_skill else _('正念练习')}"
     from media_app.tasks import dispatch_scene_image
     job_id = dispatch_scene_image(session.session_id, prompt)
     return _teaching_scene_polling_html(session.session_id, job_id)
@@ -708,12 +711,12 @@ def scene_image_status_view(request: HttpRequest, session_id: str) -> HttpRespon
     image_url = get_scene_image_url(session_id, job_id or None)
     if image_url:
         return HttpResponse(
-            f'<img src="{image_url}" alt="教学配图" class="w-full rounded-lg shadow" loading="lazy">'
+            f'<img src="{image_url}" alt="{_("教学配图")}" class="w-full rounded-lg shadow" loading="lazy">'
         )
     if not job_id:
         return HttpResponse(
             '<div class="p-3 bg-gray-50 border border-gray-200 rounded-lg text-center">'
-            '<span class="text-xs text-gray-500">暂无配图任务</span></div>'
+            f'<span class="text-xs text-gray-500">{_("暂无配图任务")}</span></div>'
         )
     resource_id = f"scene:{session_id}:{job_id}"
     if get_image_status(resource_id) == "failed":
@@ -722,7 +725,7 @@ def scene_image_status_view(request: HttpRequest, session_id: str) -> HttpRespon
             + f"?job_id={job_id}"
         )
         return _image_failed_html(
-            get_image_error(resource_id) or "配图失败，请稍后重试",
+            _(get_image_error(resource_id) or "配图失败，请稍后重试"),
             retry_url,
         )
     return _teaching_scene_polling_html(session_id, job_id)
@@ -741,7 +744,7 @@ def retry_scene_image_view(request: HttpRequest, session_id: str) -> HttpRespons
     if not prompt:
         prompt = request.POST.get("prompt", "").strip()
     if not prompt:
-        return _htmx_error("无法重试：缺少图片描述。")
+        return _htmx_error(_("无法重试：缺少图片描述。"))
     if old_job_id:
         clear_image_status(f"scene:{session_id}:{old_job_id}")
     job_id = dispatch_scene_image(session_id, prompt)
@@ -750,7 +753,7 @@ def retry_scene_image_view(request: HttpRequest, session_id: str) -> HttpRespons
 
 def _teaching_message_polling_html(message_id: str) -> HttpResponse:
     from media_app.concurrency import get_image_status, wait_label_for_status
-    label = wait_label_for_status(get_image_status(message_id))
+    label = _(wait_label_for_status(get_image_status(message_id)))
     poll_url = reverse("teaching:message_image_status", kwargs={"message_id": message_id})
     return HttpResponse(
         '<div class="mt-2 p-3 bg-purple-50 border border-purple-200 rounded-lg text-center"'
@@ -763,7 +766,7 @@ def _teaching_message_polling_html(message_id: str) -> HttpResponse:
 
 def _teaching_scene_polling_html(session_id: str, job_id: str) -> HttpResponse:
     from media_app.concurrency import get_image_status, wait_label_for_status
-    label = wait_label_for_status(get_image_status(f"scene:{session_id}:{job_id}"))
+    label = _(wait_label_for_status(get_image_status(f"scene:{session_id}:{job_id}")))
     poll_url = (
         reverse("teaching:scene_image_status", kwargs={"session_id": session_id})
         + f"?job_id={job_id}"
