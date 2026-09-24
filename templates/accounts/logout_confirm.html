@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}退出登录 - DBT 技能教学平台{% endblock %}
+{% block page_id %}logout{% endblock %}
 {% block content %}
-<div class="max-w-md mx-auto mt-10 text-center">
+<div class="dbt-auth-shell dbt-confirm-shell text-center">
     <h1 class="text-xl font-bold text-gray-800 mb-4">确认退出登录</h1>
     <p class="text-gray-600 mb-6">你确定要退出当前账号吗？</p>
     <form method="post" class="inline">

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}教学会话 - DBT 技能教学平台{% endblock %}
+{% block page_id %}teaching-session{% endblock %}
 {% block content %}
 <div class="max-w-5xl xl:max-w-6xl mx-auto mt-6">
     <div class="flex items-center justify-between mb-4">
@@ -223,9 +224,9 @@
             <p class="text-sm text-gray-500 mb-4">了解你最近的经历和感受，才能为你推荐最适合的技能。</p>
 
             {% if inquiry_data %}
-            <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-5">
-                <p class="text-sm text-purple-800 mb-3 leading-relaxed">{{ inquiry_data.greeting }}</p>
-                <p class="text-sm text-purple-900 font-medium leading-relaxed">{{ inquiry_data.question }}</p>
+            <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-5">
+                <p class="text-sm text-gray-700 mb-3 leading-relaxed">{{ inquiry_data.greeting }}</p>
+                <p class="text-sm text-gray-800 font-medium leading-relaxed">{{ inquiry_data.question }}</p>
             </div>
             {% endif %}
 
@@ -235,10 +236,10 @@
                     <label class="block text-sm font-medium text-gray-600 mb-1">你的分享</label>
                     <textarea name="personal_context" rows="4" autofocus
                               placeholder="分享你最近的经历、感受或任何想说的..."
-                              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-200 focus:border-purple-400 resize-none"></textarea>
+                              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-green-200 focus:border-green-500 resize-none"></textarea>
                     <p class="text-xs text-gray-400 mt-1">你可以分享任何事情——最近的心情变化、让你开心或困扰的事、学业或人际关系方面的感受。分享得越多，AI 越能为你推荐合适的技能。</p>
                 </div>
-                <button type="submit" class="w-full bg-purple-600 text-white px-6 py-3 rounded-lg hover:bg-purple-700 transition">
+                <button type="submit" class="w-full bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition">
                     分享并开始推荐
                 </button>
             </form>

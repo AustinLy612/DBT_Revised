@@ -1,28 +1,41 @@
 {% extends "base.html" %}
 {% block title %}DBT 技能教学平台 - 首页{% endblock %}
+{% block page_id %}home{% endblock %}
 {% block content %}
-<div class="text-center py-16">
-    <h1 class="text-3xl font-bold text-gray-800 mb-4">欢迎使用 DBT 技能教学平台</h1>
-    <p class="text-gray-600 mb-8 max-w-xl mx-auto">本平台为研究用 DBT 技能教学与训练工具，通过个性化 AI 教学帮助你学习和练习正念技能。</p>
-    {% if user.is_authenticated %}
-        {% if user.profile_completed %}
-            <div class="flex justify-center gap-3">
-                <a href="{% url 'teaching:home' %}" class="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">开始教学</a>
-                <a href="{% url 'mood:home' %}" class="inline-block bg-purple-100 text-purple-700 px-6 py-3 rounded-lg hover:bg-purple-200 transition border border-purple-200">心情记录</a>
-                <a href="{% url 'mood:achievements' %}" class="inline-block bg-yellow-100 text-yellow-700 px-6 py-3 rounded-lg hover:bg-yellow-200 transition border border-yellow-200">成就</a>
-                <a href="{% url 'ema_log:log' %}" class="inline-block bg-green-600 text-white px-6 py-3 rounded-lg hover:bg-green-700 transition">DBT日志</a>
-            </div>
-        {% else %}
-            <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 max-w-md mx-auto">
-                <p class="text-yellow-700 text-sm mb-3">请先完成个人问卷，以便 AI 为你提供个性化教学体验。</p>
-                <a href="{% url 'questionnaire:profile' %}" class="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">填写问卷</a>
-            </div>
-        {% endif %}
-    {% else %}
-        <div class="space-x-4">
-            <a href="/accounts/login/" class="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">登录</a>
-            <a href="/accounts/register/" class="inline-block bg-gray-200 text-gray-700 px-6 py-3 rounded-lg hover:bg-gray-300 transition">注册</a>
+<section class="dbt-home-hero" aria-labelledby="home-title">
+    <div class="dbt-hero-copy">
+        <h1 id="home-title">欢迎使用 DBT 技能教学平台</h1>
+        <p>本平台为研究用 DBT 技能教学与训练工具，通过个性化 AI 教学帮助你学习和练习正念技能。</p>
+        <div class="dbt-hero-actions">
+            {% if user.is_authenticated %}
+                {% if user.role == 'report_viewer' %}
+                    <a href="{% url 'reports:dashboard' %}" class="dbt-button dbt-button-primary">查看学生报告</a>
+                {% elif user.profile_completed %}
+                    <a href="{% url 'teaching:home' %}" class="dbt-button dbt-button-primary">开始教学</a>
+                {% else %}
+                    <a href="{% url 'questionnaire:profile' %}" class="dbt-button dbt-button-primary">填写问卷</a>
+                {% endif %}
+            {% else %}
+                <a href="/accounts/login/" class="dbt-button dbt-button-primary">登录</a>
+                <a href="/accounts/register/" class="dbt-button dbt-button-secondary">注册</a>
+            {% endif %}
         </div>
+    </div>
+</section>
+{% if user.is_authenticated %}
+    {% if user.role == 'report_viewer' %}
+    <p class="dbt-home-note">报告查看权限仅适用于已授权的学生报告。</p>
+    {% elif user.profile_completed %}
+    <section class="dbt-home-tools" aria-labelledby="tools-title">
+        <h2 id="tools-title">你的学习工具</h2>
+        <div class="dbt-tool-grid">
+            <a href="{% url 'mood:home' %}"><strong>心情记录</strong><span>查看和记录心情变化</span></a>
+            <a href="{% url 'mood:achievements' %}"><strong>成就</strong><span>回顾练习进展</span></a>
+            <a href="{% url 'ema_log:log' %}"><strong>DBT日志</strong><span>填写日常技能练习记录</span></a>
+        </div>
+    </section>
+    {% else %}
+    <p class="dbt-home-note">请先完成个人问卷，以便 AI 为你提供个性化教学体验。</p>
     {% endif %}
-</div>
+{% endif %}
 {% endblock %}

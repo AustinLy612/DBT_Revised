@@ -1,15 +1,17 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}DBT 技能教学平台{% endblock %}</title>
+    <script src="{% static 'js/theme.js' %}?v=20260924a"></script>
     <style>
         /* Alpine.js FOUC prevention */
         [x-cloak] { display: none !important; }
         /* Skeleton shimmer for AI response loading */
         @keyframes shimmer{0%{background-position:-200px 0}100%{background-position:calc(200px + 100%) 0}}
-        .skeleton{background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);background-size:200px 100%;animation:shimmer 1.5s ease-in-out infinite;border-radius:6px}
+        .skeleton{background:linear-gradient(90deg,#dce7e5 25%,#edf3f2 50%,#dce7e5 75%);background-size:200px 100%;animation:shimmer 1.5s ease-in-out infinite;border-radius:10px}
         .htmx-indicator{opacity:0;transition:opacity .2s ease-in}
         .htmx-request .htmx-indicator{opacity:1}
         .htmx-request.htmx-indicator{opacity:1}
@@ -17,26 +19,40 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/static/django_htmx/htmx.min.js"></script>
     <script src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js" defer></script>
+    <link rel="stylesheet" href="{% static 'css/design.css' %}?v=20260924c">
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-gray-50 min-h-screen" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
-    <nav class="bg-white shadow-sm border-b">
-        <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-            <a href="/" class="text-lg font-semibold text-blue-700">DBT 技能教学平台</a>
-            <div class="flex items-center gap-4">
+<body class="dbt-app min-h-screen" data-page="{% block page_id %}general{% endblock %}" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+    <a class="dbt-skip-link" href="#main-content">跳转到主要内容</a>
+    <nav class="dbt-nav" aria-label="主导航">
+        <div class="dbt-nav-inner">
+            <a href="/" class="dbt-brand">DBT 技能教学平台</a>
+            <div class="dbt-nav-links">
                 {% if user.is_authenticated %}
-                    <span class="text-sm text-gray-600">{{ user.username }}</span>
-                    <a href="/accounts/logout/" class="text-sm text-gray-500 hover:text-gray-700">退出</a>
+                    {% if user.role == 'student' and user.profile_completed %}
+                    <a href="{% url 'teaching:home' %}">教学</a>
+                    <a href="{% url 'mood:home' %}">心情</a>
+                    <a href="{% url 'ema_log:log' %}">DBT日志</a>
+                    <a href="{% url 'questionnaire:profile' %}">个人问卷</a>
+                    {% elif user.role == 'report_viewer' %}
+                    <a href="{% url 'reports:dashboard' %}">学生报告</a>
+                    {% endif %}
+                    <span class="dbt-nav-user">{{ user.username }}</span>
+                    <a href="/accounts/logout/">退出</a>
                 {% else %}
-                    <a href="/accounts/login/" class="text-sm text-blue-600 hover:text-blue-800">登录</a>
+                    <a href="/accounts/login/">登录</a>
                 {% endif %}
             </div>
+            <button class="dbt-theme-toggle" type="button" aria-label="切换到深色模式" title="切换到深色模式">
+                <span class="dbt-theme-icon" aria-hidden="true">☾</span>
+                <span class="dbt-theme-label">深色模式</span>
+            </button>
         </div>
     </nav>
-    <main class="max-w-5xl xl:max-w-6xl mx-auto px-4 py-6">
+    <main id="main-content" class="dbt-main">
         {% block content %}{% endblock %}
     </main>
-    <footer class="text-center text-xs text-gray-400 py-4 border-t">
+    <footer class="dbt-footer">
         <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" class="hover:text-gray-500">豫ICP备2026025419号</a>
     </footer>
     <script src="/static/js/form-submit-guard.js?v=20260804a"></script>
